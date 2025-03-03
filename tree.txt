@@ -1,0 +1,302 @@
+Folder PATH listing
+Volume serial number is C2DC-C523
+C:\USERS\ATA\DESKTOP\BEP\CODE\DATA\STENOSIS_DETECTION
+|   test_labels.csv
+|   timing_test.xlsx
+|   timing_val.xlsx
+|   train_labels.csv
+|   
++---dataset
+|       14_002_5_0016.bmp
+|       14_002_5_0016.xml
+|       ---- TRUNCATED RESPONSE ---
+|       14_099_6_0024.bmp
+|       14_099_6_0024.xml
+|       14_099_8_0006.bmp
+|       14_099_8_0006.xml
+|       14_099_8_0007.bmp
+|       14_099_8_0007.xml
+|       14_099_8_0008.bmp
+|       14_099_8_0008.xml
+|       14_099_8_0009.bmp
+|       14_099_8_0009.xml
+|       14_099_8_0010.bmp
+|       14_099_8_0010.xml
+|       14_099_8_0011.bmp
+|       14_099_8_0011.xml
+|       14_099_8_0012.bmp
+|       14_099_8_0012.xml
+|       
++---video_test
+|       14-001 (7)#faster_rcnn_inception_resnet_v2_atrous_coco.avi
+|       14-001 (7)#faster_rcnn_nas_lowproposals_coco.avi
+|       14-001 (7)#faster_rcnn_resnet101_coco.avi
+|       14-001 (7)#faster_rcnn_resnet50_coco.avi
+|       14-001 (7)#input.avi
+|       14-001 (7)#rfcn_resnet101_coco.avi
+|       14-001 (7)#ssd_mobilenet_v1_fpn_coco.avi
+|       14-001 (7)#ssd_mobilenet_v2_coco.avi
+|       14-001 (7)#ssd_resnet50_v1_fpn.avi
+|       14-003 (14)#faster_rcnn_inception_resnet_v2_atrous_coco.avi
+|       14-003 (14)#faster_rcnn_nas_lowproposals_coco.avi
+|       14-003 (14)#faster_rcnn_resnet101_coco.avi
+|       14-003 (14)#faster_rcnn_resnet50_coco.avi
+|       14-003 (14)#input.avi
+|       14-003 (14)#rfcn_resnet101_coco.avi
+|       14-003 (14)#ssd_mobilenet_v1_fpn_coco.avi
+|       14-003 (14)#ssd_mobilenet_v2_coco.avi
+|       14-003 (14)#ssd_resnet50_v1_fpn.avi
+|       14-005 (21)#faster_rcnn_inception_resnet_v2_atrous_coco.avi
+|       14-005 (21)#faster_rcnn_nas_lowproposals_coco.avi
+|       14-005 (21)#faster_rcnn_resnet101_coco.avi
+|       14-005 (21)#faster_rcnn_resnet50_coco.avi
+|       14-005 (21)#input.avi
+|       14-005 (21)#rfcn_resnet101_coco.avi
+|       14-005 (21)#ssd_mobilenet_v1_fpn_coco.avi
+|       14-005 (21)#ssd_mobilenet_v2_coco.avi
+|       14-005 (21)#ssd_resnet50_v1_fpn.avi
+|       14-008 (1)#faster_rcnn_inception_resnet_v2_atrous_coco.avi
+|       14-008 (1)#faster_rcnn_nas_lowproposals_coco.avi
+|       14-008 (1)#faster_rcnn_resnet101_coco.avi
+|       14-008 (1)#faster_rcnn_resnet50_coco.avi
+|       14-008 (1)#input.avi
+|       14-008 (1)#rfcn_resnet101_coco.avi
+|       14-008 (1)#ssd_mobilenet_v1_fpn_coco.avi
+|       14-008 (1)#ssd_mobilenet_v2_coco.avi
+|       14-008 (1)#ssd_resnet50_v1_fpn.avi
+|       14-008 (7)#faster_rcnn_inception_resnet_v2_atrous_coco.avi
+|       14-008 (7)#faster_rcnn_nas_lowproposals_coco.avi
+|       14-008 (7)#faster_rcnn_resnet101_coco.avi
+|       14-008 (7)#faster_rcnn_resnet50_coco.avi
+|       14-008 (7)#input.avi
+|       14-008 (7)#rfcn_resnet101_coco.avi
+|       14-008 (7)#ssd_mobilenet_v1_fpn_coco.avi
+|       14-008 (7)#ssd_mobilenet_v2_coco.avi
+|       14-008 (7)#ssd_resnet50_v1_fpn.avi
+|       14-009 (2)#faster_rcnn_inception_resnet_v2_atrous_coco.avi
+|       14-009 (2)#faster_rcnn_nas_lowproposals_coco.avi
+|       14-009 (2)#faster_rcnn_resnet101_coco.avi
+|       14-009 (2)#faster_rcnn_resnet50_coco.avi
+|       14-009 (2)#input.avi
+|       14-009 (2)#rfcn_resnet101_coco.avi
+|       14-009 (2)#ssd_mobilenet_v1_fpn_coco.avi
+|       14-009 (2)#ssd_mobilenet_v2_coco.avi
+|       14-009 (2)#ssd_resnet50_v1_fpn.avi
+|       14-010 (21)#faster_rcnn_inception_resnet_v2_atrous_coco.avi
+|       14-010 (21)#faster_rcnn_nas_lowproposals_coco.avi
+|       14-010 (21)#faster_rcnn_resnet101_coco.avi
+|       14-010 (21)#faster_rcnn_resnet50_coco.avi
+|       14-010 (21)#input.avi
+|       14-010 (21)#rfcn_resnet101_coco.avi
+|       14-010 (21)#ssd_mobilenet_v1_fpn_coco.avi
+|       14-010 (21)#ssd_mobilenet_v2_coco.avi
+|       14-010 (21)#ssd_resnet50_v1_fpn.avi
+|       14-014 (4)#faster_rcnn_inception_resnet_v2_atrous_coco.avi
+|       14-014 (4)#faster_rcnn_nas_lowproposals_coco.avi
+|       14-014 (4)#faster_rcnn_resnet101_coco.avi
+|       14-014 (4)#faster_rcnn_resnet50_coco.avi
+|       14-014 (4)#input.avi
+|       14-014 (4)#rfcn_resnet101_coco.avi
+|       14-014 (4)#ssd_mobilenet_v1_fpn_coco.avi
+|       14-014 (4)#ssd_mobilenet_v2_coco.avi
+|       14-014 (4)#ssd_resnet50_v1_fpn.avi
+|       14-017 (18)#faster_rcnn_inception_resnet_v2_atrous_coco.avi
+|       14-017 (18)#faster_rcnn_nas_lowproposals_coco.avi
+|       14-017 (18)#faster_rcnn_resnet101_coco.avi
+|       14-017 (18)#faster_rcnn_resnet50_coco.avi
+|       14-017 (18)#input.avi
+|       14-017 (18)#rfcn_resnet101_coco.avi
+|       14-017 (18)#ssd_mobilenet_v1_fpn_coco.avi
+|       14-017 (18)#ssd_mobilenet_v2_coco.avi
+|       14-017 (18)#ssd_resnet50_v1_fpn.avi
+|       14-019 (4)#faster_rcnn_inception_resnet_v2_atrous_coco.avi
+|       14-019 (4)#faster_rcnn_nas_lowproposals_coco.avi
+|       14-019 (4)#faster_rcnn_resnet101_coco.avi
+|       14-019 (4)#faster_rcnn_resnet50_coco.avi
+|       14-019 (4)#input.avi
+|       14-019 (4)#rfcn_resnet101_coco.avi
+|       14-019 (4)#ssd_mobilenet_v1_fpn_coco.avi
+|       14-019 (4)#ssd_mobilenet_v2_coco.avi
+|       14-019 (4)#ssd_resnet50_v1_fpn.avi
+|       
+\---video_val
+        14-002 (5)#faster_rcnn_inception_resnet_v2_atrous_coco.avi
+        14-002 (5)#faster_rcnn_nas_lowproposals_coco.avi
+        14-002 (5)#faster_rcnn_resnet101_coco.avi
+        14-002 (5)#faster_rcnn_resnet50_coco.avi
+        14-002 (5)#input.avi
+        14-002 (5)#rfcn_resnet101_coco.avi
+        14-002 (5)#ssd_mobilenet_v1_fpn_coco.avi
+        14-002 (5)#ssd_mobilenet_v2_coco.avi
+        14-002 (5)#ssd_resnet50_v1_fpn.avi
+        14-002 (8)#faster_rcnn_inception_resnet_v2_atrous_coco.avi
+        14-002 (8)#faster_rcnn_nas_lowproposals_coco.avi
+        14-002 (8)#faster_rcnn_resnet101_coco.avi
+        14-002 (8)#faster_rcnn_resnet50_coco.avi
+        14-002 (8)#input.avi
+        14-002 (8)#rfcn_resnet101_coco.avi
+        14-002 (8)#ssd_mobilenet_v1_fpn_coco.avi
+        14-002 (8)#ssd_mobilenet_v2_coco.avi
+        14-002 (8)#ssd_resnet50_v1_fpn.avi
+        14-003 (1)#faster_rcnn_inception_resnet_v2_atrous_coco.avi
+        14-003 (1)#faster_rcnn_nas_lowproposals_coco.avi
+        14-003 (1)#faster_rcnn_resnet101_coco.avi
+        14-003 (1)#faster_rcnn_resnet50_coco.avi
+        14-003 (1)#input.avi
+        14-003 (1)#rfcn_resnet101_coco.avi
+        14-003 (1)#ssd_mobilenet_v1_fpn_coco.avi
+        14-003 (1)#ssd_mobilenet_v2_coco.avi
+        14-003 (1)#ssd_resnet50_v1_fpn.avi
+        14-003 (2)#faster_rcnn_inception_resnet_v2_atrous_coco.avi
+        14-003 (2)#faster_rcnn_nas_lowproposals_coco.avi
+        14-003 (2)#faster_rcnn_resnet101_coco.avi
+        14-003 (2)#faster_rcnn_resnet50_coco.avi
+        14-003 (2)#input.avi
+        14-003 (2)#rfcn_resnet101_coco.avi
+        14-003 (2)#ssd_mobilenet_v1_fpn_coco.avi
+        14-003 (2)#ssd_mobilenet_v2_coco.avi
+        14-003 (2)#ssd_resnet50_v1_fpn.avi
+        14-006 (1)#faster_rcnn_inception_resnet_v2_atrous_coco.avi
+        14-006 (1)#faster_rcnn_nas_lowproposals_coco.avi
+        14-006 (1)#faster_rcnn_resnet101_coco.avi
+        14-006 (1)#faster_rcnn_resnet50_coco.avi
+        14-006 (1)#input.avi
+        14-006 (1)#rfcn_resnet101_coco.avi
+        14-006 (1)#ssd_mobilenet_v1_fpn_coco.avi
+        14-006 (1)#ssd_mobilenet_v2_coco.avi
+        14-006 (1)#ssd_resnet50_v1_fpn.avi
+        14-007 (10)#faster_rcnn_inception_resnet_v2_atrous_coco.avi
+        14-007 (10)#faster_rcnn_nas_lowproposals_coco.avi
+        14-007 (10)#faster_rcnn_resnet101_coco.avi
+        14-007 (10)#faster_rcnn_resnet50_coco.avi
+        14-007 (10)#input.avi
+        14-007 (10)#rfcn_resnet101_coco.avi
+        14-007 (10)#ssd_mobilenet_v1_fpn_coco.avi
+        14-007 (10)#ssd_mobilenet_v2_coco.avi
+        14-007 (10)#ssd_resnet50_v1_fpn.avi
+        14-007 (3)#faster_rcnn_inception_resnet_v2_atrous_coco.avi
+        14-007 (3)#faster_rcnn_nas_lowproposals_coco.avi
+        14-007 (3)#faster_rcnn_resnet101_coco.avi
+        14-007 (3)#faster_rcnn_resnet50_coco.avi
+        14-007 (3)#input.avi
+        14-007 (3)#rfcn_resnet101_coco.avi
+        14-007 (3)#ssd_mobilenet_v1_fpn_coco.avi
+        14-007 (3)#ssd_mobilenet_v2_coco.avi
+        14-007 (3)#ssd_resnet50_v1_fpn.avi
+        14-007 (5)#faster_rcnn_inception_resnet_v2_atrous_coco.avi
+        14-007 (5)#faster_rcnn_nas_lowproposals_coco.avi
+        14-007 (5)#faster_rcnn_resnet101_coco.avi
+        14-007 (5)#faster_rcnn_resnet50_coco.avi
+        14-007 (5)#input.avi
+        14-007 (5)#rfcn_resnet101_coco.avi
+        14-007 (5)#ssd_mobilenet_v1_fpn_coco.avi
+        14-007 (5)#ssd_mobilenet_v2_coco.avi
+        14-007 (5)#ssd_resnet50_v1_fpn.avi
+        14-007 (6)#faster_rcnn_inception_resnet_v2_atrous_coco.avi
+        14-007 (6)#faster_rcnn_nas_lowproposals_coco.avi
+        14-007 (6)#faster_rcnn_resnet101_coco.avi
+        14-007 (6)#faster_rcnn_resnet50_coco.avi
+        14-007 (6)#input.avi
+        14-007 (6)#rfcn_resnet101_coco.avi
+        14-007 (6)#ssd_mobilenet_v2_coco.avi
+        14-007 (6)#ssd_resnet50_v1_fpn.avi
+        14-007 (8)#faster_rcnn_inception_resnet_v2_atrous_coco.avi
+        14-007 (8)#faster_rcnn_nas_lowproposals_coco.avi
+        14-007 (8)#faster_rcnn_resnet101_coco.avi
+        14-007 (8)#faster_rcnn_resnet50_coco.avi
+        14-007 (8)#input.avi
+        14-007 (8)#rfcn_resnet101_coco.avi
+        14-007 (8)#ssd_mobilenet_v1_fpn_coco.avi
+        14-007 (8)#ssd_mobilenet_v2_coco.avi
+        14-007 (8)#ssd_resnet50_v1_fpn.avi
+        14-010 (1)#faster_rcnn_inception_resnet_v2_atrous_coco.avi
+        14-010 (1)#faster_rcnn_nas_lowproposals_coco.avi
+        14-010 (1)#faster_rcnn_resnet101_coco.avi
+        14-010 (1)#faster_rcnn_resnet50_coco.avi
+        14-010 (1)#input.avi
+        14-010 (1)#rfcn_resnet101_coco.avi
+        14-010 (1)#ssd_mobilenet_v1_fpn_coco.avi
+        14-010 (1)#ssd_mobilenet_v2_coco.avi
+        14-010 (1)#ssd_resnet50_v1_fpn.avi
+        14-010 (6)#faster_rcnn_inception_resnet_v2_atrous_coco.avi
+        14-010 (6)#faster_rcnn_nas_lowproposals_coco.avi
+        14-010 (6)#faster_rcnn_resnet101_coco.avi
+        14-010 (6)#faster_rcnn_resnet50_coco.avi
+        14-010 (6)#input.avi
+        14-010 (6)#rfcn_resnet101_coco.avi
+        14-010 (6)#ssd_mobilenet_v1_fpn_coco.avi
+        14-010 (6)#ssd_mobilenet_v2_coco.avi
+        14-010 (6)#ssd_resnet50_v1_fpn.avi
+        14-012 (3)#faster_rcnn_inception_resnet_v2_atrous_coco.avi
+        14-012 (3)#faster_rcnn_nas_lowproposals_coco.avi
+        14-012 (3)#faster_rcnn_resnet101_coco.avi
+        14-012 (3)#faster_rcnn_resnet50_coco.avi
+        14-012 (3)#input.avi
+        14-012 (3)#rfcn_resnet101_coco.avi
+        14-012 (3)#ssd_mobilenet_v1_fpn_coco.avi
+        14-012 (3)#ssd_mobilenet_v2_coco.avi
+        14-012 (3)#ssd_resnet50_v1_fpn.avi
+        14-012 (4)#faster_rcnn_inception_resnet_v2_atrous_coco.avi
+        14-012 (4)#faster_rcnn_nas_lowproposals_coco.avi
+        14-012 (4)#faster_rcnn_resnet101_coco.avi
+        14-012 (4)#faster_rcnn_resnet50_coco.avi
+        14-012 (4)#input.avi
+        14-012 (4)#rfcn_resnet101_coco.avi
+        14-012 (4)#ssd_mobilenet_v1_fpn_coco.avi
+        14-012 (4)#ssd_mobilenet_v2_coco.avi
+        14-012 (4)#ssd_resnet50_v1_fpn.avi
+        14-014 (1)#faster_rcnn_inception_resnet_v2_atrous_coco.avi
+        14-014 (1)#faster_rcnn_nas_lowproposals_coco.avi
+        14-014 (1)#faster_rcnn_resnet101_coco.avi
+        14-014 (1)#faster_rcnn_resnet50_coco.avi
+        14-014 (1)#input.avi
+        14-014 (1)#rfcn_resnet101_coco.avi
+        14-014 (1)#ssd_mobilenet_v1_fpn_coco.avi
+        14-014 (1)#ssd_mobilenet_v2_coco.avi
+        14-014 (1)#ssd_resnet50_v1_fpn.avi
+        14-015 (1)#faster_rcnn_inception_resnet_v2_atrous_coco.avi
+        14-015 (1)#faster_rcnn_nas_lowproposals_coco.avi
+        14-015 (1)#faster_rcnn_resnet101_coco.avi
+        14-015 (1)#faster_rcnn_resnet50_coco.avi
+        14-015 (1)#input.avi
+        14-015 (1)#rfcn_resnet101_coco.avi
+        14-015 (1)#ssd_mobilenet_v1_fpn_coco.avi
+        14-015 (1)#ssd_mobilenet_v2_coco.avi
+        14-015 (1)#ssd_resnet50_v1_fpn.avi
+        14-016 (1)#faster_rcnn_inception_resnet_v2_atrous_coco.avi
+        14-016 (1)#faster_rcnn_nas_lowproposals_coco.avi
+        14-016 (1)#faster_rcnn_resnet101_coco.avi
+        14-016 (1)#faster_rcnn_resnet50_coco.avi
+        14-016 (1)#input.avi
+        14-016 (1)#rfcn_resnet101_coco.avi
+        14-016 (1)#ssd_mobilenet_v1_fpn_coco.avi
+        14-016 (1)#ssd_mobilenet_v2_coco.avi
+        14-016 (1)#ssd_resnet50_v1_fpn.avi
+        14-017 (1)#faster_rcnn_inception_resnet_v2_atrous_coco.avi
+        14-017 (1)#faster_rcnn_nas_lowproposals_coco.avi
+        14-017 (1)#faster_rcnn_resnet101_coco.avi
+        14-017 (1)#faster_rcnn_resnet50_coco.avi
+        14-017 (1)#input.avi
+        14-017 (1)#rfcn_resnet101_coco.avi
+        14-017 (1)#ssd_mobilenet_v1_fpn_coco.avi
+        14-017 (1)#ssd_mobilenet_v2_coco.avi
+        14-017 (1)#ssd_resnet50_v1_fpn.avi
+        14-018 (6)#faster_rcnn_inception_resnet_v2_atrous_coco.avi
+        14-018 (6)#faster_rcnn_nas_lowproposals_coco.avi
+        14-018 (6)#faster_rcnn_resnet101_coco.avi
+        14-018 (6)#faster_rcnn_resnet50_coco.avi
+        14-018 (6)#input.avi
+        14-018 (6)#rfcn_resnet101_coco.avi
+        14-018 (6)#ssd_mobilenet_v1_fpn_coco.avi
+        14-018 (6)#ssd_mobilenet_v2_coco.avi
+        14-018 (6)#ssd_resnet50_v1_fpn.avi
+        14-018 (8)#faster_rcnn_inception_resnet_v2_atrous_coco.avi
+        14-018 (8)#faster_rcnn_nas_lowproposals_coco.avi
+        14-018 (8)#faster_rcnn_resnet101_coco.avi
+        14-018 (8)#faster_rcnn_resnet50_coco.avi
+        14-018 (8)#input.avi
+        14-018 (8)#rfcn_resnet101_coco.avi
+        14-018 (8)#ssd_mobilenet_v1_fpn_coco.avi
+        14-018 (8)#ssd_mobilenet_v2_coco.avi
+        14-018 (8)#ssd_resnet50_v1_fpn.avi
+        
