@@ -28,6 +28,6 @@ def log(*args, **kwargs):
 
 
     message = ''.join(map(str, args))
-    print(f"{c_timestamp} [{c_filename}.{c_funcname}] \"{message}\"", **kwargs)
+    print(f"{c_timestamp}[{c_filename}.{c_funcname}] \"{message}\"", **kwargs)
 
 
