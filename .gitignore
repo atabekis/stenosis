@@ -1,4 +1,17 @@
-data
+.deprecated.py
+.cache
+
+data/CADICA/nonselectedVideos
+data/CADICA/selectedVideos
+
+data/DANILOV/dataset
+data/DANILOV/video_test
+data/DANILOV/video_val
+data/DANILOV/timing_test.xlsx
+data/DANILOV/timing_val.xlsx
+data/DANILOV/test_labels.csv
+data/DANILOV/train_labels.csv
+
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

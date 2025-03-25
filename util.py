@@ -1,6 +1,14 @@
-import datetime
-import inspect
+# util.py
+
+# Python imports
 import os
+import torch
+import pickle
+import inspect
+import datetime
+
+# Local imports
+from config import CACHE_DIR, CACHED_DATA_DIR, CACHED_MODELS_DIR
 
 COLORS = {
     "timestamp": "\033[92m", # green
@@ -8,6 +16,7 @@ COLORS = {
     "funcname": "\033[95m", # pink
     "reset": "\033[0m" # reset the color
 }
+
 
 def log(*args, verbose=True, **kwargs):
     """
@@ -29,7 +38,30 @@ def log(*args, verbose=True, **kwargs):
 
     message = ''.join(map(str, args))
 
-    if verbose:  # add this!
+    if verbose:
         print(f"{c_timestamp}[{c_filename}.{c_funcname}] \"{message}\"", **kwargs)
 
 
+def cache_data(filename: str, data: any = None, cache_data_dir = CACHED_DATA_DIR ,verbose: bool = True) -> any:
+    """
+    If data is provided, save it to the cache file path and return the data
+    otherwise load and return the data from the cached file
+    This function uses the CACHED_DATA_PATH which points to /project_root/.cache/data
+    """
+    if data is None:
+        if os.path.exists(cache_data_dir / filename):
+            log(f"Preprocessed XCA Images found, loading from cache: {filename}", verbose=verbose)
+            with open(cache_data_dir / filename, 'rb') as f:
+                return pickle.load(f)
+        else:
+            return None
+    else:
+        log(f"Saving data to cache: {filename}", verbose=verbose)
+        with open(cache_data_dir / filename, 'wb') as f:
+            pickle.dump(data, f)
+        return data
+
+
+def to_numpy(*tensors):
+    """this method is used to convert tensors back into numpy arrays"""
+    return [tensor.cpu().numpy() if isinstance(tensor, torch.Tensor) else tensor for tensor in tensors]

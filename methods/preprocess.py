@@ -8,15 +8,15 @@ from collections import defaultdict
 
 # Sklearn imports
 from sklearn.pipeline import Pipeline
-from sklearn.model_selection import train_test_split
 from sklearn.utils.validation import check_is_fitted
 from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.model_selection import train_test_split, GroupKFold
 
 # Torch imports
 import torch
 
 # Local imports
-from util import log
+from util import log, cache_data
 from methods.reader import Reader, XCAImage
 from config import DEVICE, SEED, TRAIN_SIZE, VAL_SIZE, TEST_SIZE, CADICA_DATASET_DIR
 
@@ -31,7 +31,7 @@ class XCAVideo:
         self.meta = meta
 
     def __repr__(self):
-        bbox_shape = self.bboxes.shape if isinstance(self.bboxes, torch.Tensor) else None
+        bbox_shape = tuple(self.bboxes.shape) if isinstance(self.bboxes, torch.Tensor) else None
         return (f"XCAVideo("
                 f"meta={self.meta}, "
                 f"tensor_shape={tuple(self.video_tensor.shape)}, "
@@ -111,8 +111,7 @@ class VideoAggregator(BaseEstimator, TransformerMixin):
         return self
 
     def transform(self, X, y=None):
-        videos = defaultdict(list)
-        meta_info = {}
+        videos, meta_info = defaultdict(list), {}
 
         for xca, img_data in X:
             key = (xca.patient_id, xca.video_id)
@@ -121,18 +120,16 @@ class VideoAggregator(BaseEstimator, TransformerMixin):
                 meta_info[key] = {
                     'patient_id': xca.patient_id,
                     'video_id': xca.video_id,
-                    'severity': xca.stenosis_severity  # constant for this video
+                    'severity': xca.stenosis_severity
                 }
 
         output = []
         for key, frames in videos.items():
             frames_sorted = sorted(frames, key=lambda x: x[0])
-            # Extract the frame images and bounding boxes
             frame_list = [img for (_, img, _) in frames_sorted]
             bbox_list  = [bbox for (_, _, bbox) in frames_sorted]
 
-            # If all bboxes are non-None, convert them to a torch.Tensor of shape (T, 4).
-            # Otherwise, we set bboxes_tensor to None (e.g., non-lesion videos).
+            # if all bboxes are non-none, convert them to a torch.Tensor of shape (T, 4).
             if all(bbox is not None for bbox in bbox_list):
                 bboxes_tensor = torch.tensor(bbox_list, dtype=torch.float32)
             else:
@@ -158,20 +155,19 @@ class Augmenter(BaseEstimator, TransformerMixin):
     def transform(self, X, y=None):
         augmented_videos = []
         for frame_list, bboxes, meta in X:
-            # Stack the frame list into a single (T, C, H, W) tensor (assuming grayscale).
-            # For each frame, if it's 2D (H x W), we unsqueeze to get (1, H, W).
-            video_tensor = torch.stack(
+            video_tensor = torch.stack( # stack frame list into a (T, C, H, W) tensor
                 [frame.unsqueeze(0) if frame.dim() == 2 else frame for frame in frame_list],
-                dim=0
-            ).to(DEVICE)
+                dim=0  # for each frame, if it's 2D (H x W), unsqueeze to get (1, H, W).
+            # ).to(DEVICE)
+            )
 
-            # If in training mode and we have a valid augmentor, let the augmentor transform the data.
-            # The augmentor should return both the augmented video tensor and bounding boxes.
+            # the augmentor should return both the augmented video tensor and bounding boxes.
             if self.is_train and self.augmentor is not None:
                 video_tensor, bboxes = self.augmentor.augment(video_tensor, bboxes)
-            # Wrap it into XCAVideo
             augmented_videos.append(XCAVideo(video_tensor, bboxes, meta))
         return augmented_videos
+
+
 
 class PreprocessPipeline(BaseEstimator, TransformerMixin):
     """
@@ -211,6 +207,7 @@ class PreprocessPipeline(BaseEstimator, TransformerMixin):
         log(f"Loading XCAImages as NumPy arrays to the disk", verbose=self.verbose)
         loaded_images = self.frame_pipeline.transform(X)
         paired = list(zip(X, loaded_images))
+        log(f"Normalizing the XCAImages", verbose=self.verbose)
 
         # step 2
         log(f"Aggregating frames into video sequences", verbose=self.verbose)
@@ -218,7 +215,7 @@ class PreprocessPipeline(BaseEstimator, TransformerMixin):
         video_sequences = aggregator.transform(paired)
 
         # step 3
-        log(f"Augmenting video sequences using: {self.augmentor.__class__.__name__}.", verbose=self.verbose)
+        log(f"Augmenting video sequences using: {self.augmentor.__class__.__name__}", verbose=self.verbose)
         augmenter = Augmenter(is_train=self.is_train, augmentor=self.augmentor)
         video_sequences = augmenter.transform(video_sequences)
 
@@ -230,11 +227,18 @@ class PreprocessPipeline(BaseEstimator, TransformerMixin):
         return self.fit(X, y).transform(X, y)
 
 
-    def split_and_transform(self, X, train_size=TRAIN_SIZE, val_size=VAL_SIZE, test_size=TEST_SIZE, random_state=SEED):
+    def split_transform(self, X, train_size=TRAIN_SIZE, val_size=VAL_SIZE, test_size=TEST_SIZE, random_state=SEED):
         """
         Split the data into training, validation and test sets based on patient_id.
         Then fit the pipeline on the training set
         """
+
+        # check for cached data:
+        cache_filename = (f"regular_split_{train_size}_{val_size}_{test_size}_{random_state}"
+                          f"_{self.augmentor.__class__.__name__}.pkl")
+        cached_result = cache_data(filename=cache_filename, data=None, verbose=self.verbose)
+        if cached_result is not None:
+            return cached_result
 
         if not np.isclose(train_size + val_size + test_size, 1.0):  # redundancy
             raise ValueError("Train, validation, and test sizes must sum to 1.")
@@ -256,11 +260,25 @@ class PreprocessPipeline(BaseEstimator, TransformerMixin):
 
         # fit on training data and compute normalization
         self.fit(splits["train"])
-        return {
+        result =  {
             "train": self.transform(splits["train"]),
             "val": self.transform(splits["val"]),
             "test": self.transform(splits["test"])
         }
+        cache_data(filename=cache_filename, data=result, verbose=True)
+        return result
+
+
+    def kfold_transform(self, X, n_splits=5, random_state=SEED, holdout_test_size: float = 0.2):
+        """
+        Performs K-Fold Cross Validation based on patient_id.
+
+        First splits the entire data into training and a final unseen test set (using holdout_test_size),
+        then applies k-fold CV on the training set.
+        """
+        return DeprecationWarning
+
+
 
 
 if __name__ == '__main__':
@@ -273,10 +291,11 @@ if __name__ == '__main__':
 
     dummy = DummyAugment()
 
-    pipeline = PreprocessPipeline(as_tensor=True, is_train=True, augmentor=dummy)
+    pipeline = PreprocessPipeline(as_tensor=True, is_train=True, augmentor=dummy, verbose=True)
 
-    splits = pipeline.split_and_transform(images)
-    log(f"Processed {len(splits['train'])} training, {len(splits['val'])} validation, and {len(splits['test'])} test video sequences.")
+
+    splits = pipeline.split_transform(images)
+    log(f"Processed {len(splits['train'])} training, {len(splits['val'])} validation, and {len(splits['test'])} test video sequences")
 
     train_img = splits['train'][0]
     print(train_img)

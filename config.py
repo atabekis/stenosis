@@ -6,6 +6,7 @@ import random
 import numpy as np
 from pathlib import Path
 
+import util
 
 # ------------ RANDOM SEED -------------- #
 SEED = 5
@@ -21,12 +22,19 @@ DANILOV_DATASET_PATH = DANILOV_DATASET_DIR / "dataset"
 
 CADICA_DATASET_DIR = PROJECT_ROOT / "data/CADICA"
 
+CACHE_DIR = PROJECT_ROOT / ".cache"
+CACHED_MODELS_DIR = CACHE_DIR / "models"
+CACHED_DATA_DIR = CACHE_DIR / "data"
+
 
 # ------------- CONTROLS --------------- #
 TRAIN_SIZE = 0.7
 VAL_SIZE = 0.2
 TEST_SIZE = 0.1
 
+DATA_LOADER_BS = 20
+DATA_LOADER_SHUFFLE = False
+DATA_LOADER_N_WORKERS = 0
 
 # ------------- CUDA & PYTORCH ---------- #
 
@@ -45,6 +53,15 @@ if not globals().get("__CONFIG_INITIALIZED__"):  # prevent these changes from ha
 
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
+
+
+    # -------- CACHING --------
+
+
+    if not CACHE_DIR.exists():
+        CACHED_MODELS_DIR.mkdir(parents=True, exist_ok=True)
+        CACHED_DATA_DIR.mkdir(parents=True, exist_ok=True)
+        util.log(f"Cache directory not found, created at: {CACHE_DIR}")
 
 
 # ------------- HELPER FUNCTIONS ---------- #

@@ -99,7 +99,7 @@ class Reader:
                         XCAImage.from_cadica(frame_path, annotation=annotation)
                     )
 
-        log("Building XCA images from the CADICA dataset.")
+        log("Building XCA images from the CADICA dataset")
 
         # Extract all lesion/nonlesion videos for each patient
         lesion_videos, nonlesion_videos = map(list, zip(*[classify_videos(patient) for patient in selected_patients]))
@@ -125,7 +125,7 @@ class Reader:
             df = pd.concat([train_df, test_df], ignore_index=True)
             df.sort_values('filename', inplace=True)
             df.to_csv(labels_csv, index=False)
-            log(f"Merged dataset created and saved to {labels_csv}.")
+            log(f"Merged dataset created and saved to {labels_csv}")
             return df
 
 
@@ -311,12 +311,7 @@ class XCAImage:
 
 if __name__ == "__main__":
     reader = Reader(dataset_dir=CADICA_DATASET_DIR)
-    # lesion_videos = reader.get(patient_id=1, lesion=True, return_videos=True)
     random_image = reader.get()
     print(random_image)
-    loaded_img = random_image.get_image()
-    print(loaded_img)
-    print(type(loaded_img))
-    print(loaded_img.shape)
-    print(loaded_img.ndim)
+
 
