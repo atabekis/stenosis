@@ -9,7 +9,7 @@ COLORS = {
     "reset": "\033[0m" # reset the color
 }
 
-def log(*args, **kwargs):
+def log(*args, verbose=True, **kwargs):
     """
     Take regular print string as input, add timestamp, filename, function or class name where log() was called from.
     """
@@ -28,6 +28,8 @@ def log(*args, **kwargs):
 
 
     message = ''.join(map(str, args))
-    print(f"{c_timestamp}[{c_filename}.{c_funcname}] \"{message}\"", **kwargs)
+
+    if verbose:  # add this!
+        print(f"{c_timestamp}[{c_filename}.{c_funcname}] \"{message}\"", **kwargs)
 
 

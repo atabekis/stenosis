@@ -5,20 +5,28 @@ import cv2
 import imageio
 import matplotlib.pyplot as plt
 
+from config import CADICA_DATASET_DIR, DANILOV_DATASET_DIR
 # Local imports
-from reader import XCAImage
-
+from methods.reader import XCAImage, Reader
 
 
 def overlay_bbox(image: XCAImage, bboxes: list, color=(0, 255, 0), thickness=1):
     """
     Overlay bounding boxes on the image.
     """
-    image = image.copy()
-    for box in bboxes:
-        xmin, ymin, xmax, ymax = box
-        cv2.rectangle(image, (xmin, ymin), (xmax, ymax), color, thickness)
-    return image
+    img = image.copy()
+
+    if bboxes and isinstance(bboxes[0], (list, tuple)): # Danilov format
+        for box in bboxes:
+            xmin, ymin, xmax, ymax = box
+            cv2.rectangle(img, (xmin, ymin), (xmax, ymax), color, thickness)
+        return img
+
+    else: # CADICA format
+        xmin, ymin, xmax, ymax = bboxes
+        cv2.rectangle(img, (xmin, ymin), (xmax, ymax), color, thickness)
+        return img
+
 
 
 def show_xca_image(xca_image: XCAImage, overlay: bool = True, figsize=(6, 6)):
@@ -63,3 +71,7 @@ def image_to_gif(xca_images, output_path="output.gif", overlay=True, fps=1):
     return output_path
 
 
+if __name__ == "__main__":
+    r = Reader(dataset_dir=DANILOV_DATASET_DIR)
+    ins = r.get(lesion=True)
+    show_xca_image(ins)

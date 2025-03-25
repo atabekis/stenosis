@@ -44,7 +44,7 @@ class Reader:
 
         # Group by filename, for possible multiple bounding boxes per image
         groups = df.groupby("filename")
-        log("Building XCA images from CSV files")
+        log("Building XCA images from CSV files using the Danilov dataset.")
 
         def build_xca_image(filename, group):
             return XCAImage.from_danilov(group, self.dataset_path)
@@ -99,6 +99,7 @@ class Reader:
                         XCAImage.from_cadica(frame_path, annotation=annotation)
                     )
 
+        log("Building XCA images from the CADICA dataset.")
 
         # Extract all lesion/nonlesion videos for each patient
         lesion_videos, nonlesion_videos = map(list, zip(*[classify_videos(patient) for patient in selected_patients]))
@@ -129,7 +130,8 @@ class Reader:
 
 
     def get(self, patient_id: int =None, video_id: int =None, frame_nr: int =None,
-            return_videos: bool =False, return_frames: bool =False) -> Union['XCAImage', list['XCAImage']]:
+            return_videos: bool =False, return_frames: bool =False,
+            lesion: bool | None = None) -> Union['XCAImage', list['XCAImage']]:
         """
         Returns a XCAImage instance, if either "patient_id, video_id, frame_nr" is None,
         return a random image from the subset.
@@ -138,27 +140,39 @@ class Reader:
         import random
 
         subset = self.xca_images
+
+        if lesion is not None and self.dataset_type == 'CADICA':  # we first need to filter lesion/nonlesion videos
+            if lesion:
+                subset = [x for x in subset if x.bbox is not None and x.stenosis_severity is not None] # lesion
+            else:
+                subset = [x for x in subset if x.bbox is None and x.stenosis_severity is None] # nonlesion
+
         criteria = [
             ("patient_id", patient_id, return_videos),
             ("video_id", video_id, return_frames),
             ("frame_nr", frame_nr, False)
         ]
 
-        for attr, value, should_return in criteria: # so when we want to return the subset directly, we can do with the two return args
+        for attr, value, should_return in criteria:
             if value is not None:
-                subset = [x for x in subset if getattr(x, attr) == value]  # systematically shrink based on pid, vid, frame_nr
+                subset = [x for x in subset if getattr(x, attr) == value]
                 if should_return:
+                    if not subset:
+                        raise ValueError(
+                            f"No images found for the given criteria (patient_id={patient_id}, video_id={video_id}, frame_nr={frame_nr}),"
+                            f"lesion={lesion}"
+                        )
                     return subset
 
-        if not subset:  # if our subset ended up empty, means something is wrong with the args
+        if not subset:
             raise ValueError(
                 f"No images found for the given criteria (patient_id={patient_id}, video_id={video_id}, frame_nr={frame_nr})."
             )
 
-        if patient_id is not None and video_id is not None and frame_nr is not None:  # extra redundancy, not exactly needed
+        if patient_id is not None and video_id is not None and frame_nr is not None:
             if len(subset) == 1:
                 return subset[0]
-            else:
+            else:  # redundancy
                 raise ValueError(
                     f"Expected exactly one image, found {len(subset)} "
                     f"(patient_id={patient_id}, video_id={video_id}, frame_nr={frame_nr})."
@@ -257,7 +271,8 @@ class XCAImage:
             if not m:  # check if there exists any multiple bounding boxes
                 raise ValueError(f"Invalid annotation format: {annotation}, in file: {self.path}")
 
-            xmin, ymin, xmax, ymax = map(int, m.groups()[:4])
+            xmin, ymin, w, h = map(int, m.groups()[:4])
+            xmax, ymax = xmin + w, ymin + h  # in CADICA the format is x y w h
             self.bbox = [xmin, ymin, xmax, ymax]
 
             stenosis_severity = m.group(5)
@@ -288,7 +303,7 @@ class XCAImage:
 
     def __repr__(self):
         return (f"XCAImage(patient={self.patient_id}, video={self.video_id}, frame={self.frame_nr}, "
-                f"width={self.width}, height={self.height}, bbox(es)={self.bbox}), "
+                f"width={self.width}, height={self.height}, bbox(es)={self.bbox}, "
                 f"stenosis_severity={self.stenosis_severity}, dataset={self.dataset})")
 
 
@@ -296,5 +311,12 @@ class XCAImage:
 
 if __name__ == "__main__":
     reader = Reader(dataset_dir=CADICA_DATASET_DIR)
-
+    # lesion_videos = reader.get(patient_id=1, lesion=True, return_videos=True)
+    random_image = reader.get()
+    print(random_image)
+    loaded_img = random_image.get_image()
+    print(loaded_img)
+    print(type(loaded_img))
+    print(loaded_img.shape)
+    print(loaded_img.ndim)
 
