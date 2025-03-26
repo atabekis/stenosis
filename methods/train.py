@@ -1,7 +1,10 @@
 # train.py
 
 # Python imports
+import sys
 import time
+
+
 import numpy as np
 from tqdm import tqdm
 
@@ -9,14 +12,13 @@ from tqdm import tqdm
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import GradScaler, autocast
 
 # Local imports
 from config import DEVICE
-from util import log, to_numpy
+from util import log, to_numpy, to_device
 
 
-# TODO: add loss function here
 
 class EarlyStopping:
     def __init__(self, tolerance=30, delta=0.001):
@@ -38,9 +40,74 @@ class EarlyStopping:
             self.best_score = score
             self.counter = 0
 
+def train_simple(train_loader, val_loader, model,
+          num_epochs=100, learning_rate=1e-3, early_stop=50,
+          verbosity=-1, use_pbar=True):
+    """
+    Main training logic for a given model, see README.md for more details.
+    """
+    # ---- Initialize variables of interest and history ----- #
+    train_hist, val_hist = [], []
+
+    # ----- Initialize the methods ------- #
+    early_stopper = EarlyStopping(tolerance=early_stop, delta=0.001)  # initialize the early stopping logic
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-5)  # ADAM optimizer + weight decay
+
+    # ----- Get the model ready ----- #
+    model.to(DEVICE)  # pass it onto CUDA or CPU
+    tqdm_pbar = tqdm(range(num_epochs), desc='Initializing', colour='green') if use_pbar else range(num_epochs)
+    start_time = time.time()
+
+    # -------- Training -------- #
+    for epoch in range(num_epochs):
+        model.train()
+        train_loss, val_loss = 0.0, 0.0
+        print(f'------- Epoch {epoch + 1} --------')
+        for i, (X_batch, y_batch, meta) in enumerate(train_loader, 0):
+
+            optimizer.zero_grad()
+
+            y_pred = model(X_batch, y_batch)
+
+            loss = model.loss_fn(y_pred)
+            loss.backward()
+
+            train_loss += loss.item()
+            print(f'----- Pass {i} Loss {loss.item():.4f}')
+
+        # ----- Validation ----- #
+        model.eval()
+        with torch.no_grad():
+            for X_batch, y_batch in val_loader:
+                y_pred = model(X_batch, y_batch)
+                loss = model.loss_fn(y_pred)
+                val_loss += loss.item()
+        model.train()
+
+        # Get the losses & store
+        train_loss /= len(train_loader)
+        val_loss /= len(val_loader)
+        train_hist.append(train_loss)
+        val_hist.append(val_loss)
+
+        # -------- Printing --------- #
+        if (verbosity > 0) and (epoch % verbosity == 0):
+            log(f"Epoch [{epoch}/{num_epochs}] Train Loss: {train_loss:.8f}, Validation Loss: {val_loss:.8f}")
+
+        if use_pbar:
+            tqdm_pbar.set_description(
+                f"Epoch [{epoch + 1}/{num_epochs}] Train Loss: {train_loss:.8f},"
+                f" Val Loss: {val_loss:.8f}, Early Stop: {early_stopper.counter}")
+            tqdm_pbar.update(1)
+
+    return {
+        'model_name': model.__class__.__name__, 'model': model,
+        'train_hist': train_hist, 'val_hist': val_hist,
+        'time_took': time.time() - start_time
+    }
 
 
-def train(train_loader, val_loader, model, loss_fn,
+def train(train_loader, val_loader, model,
           num_epochs=100, learning_rate=1e-3, early_stop=50,
           verbosity=-1, use_pbar=True):
     """
@@ -51,7 +118,6 @@ def train(train_loader, val_loader, model, loss_fn,
     train_hist, val_hist = [], []
     best_loss, best_weights = np.inf, None
 
-
     # ----- Initialize the methods ------- #
     early_stopper = EarlyStopping(tolerance=early_stop, delta=0.001)  # initialize the early stopping logic
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-5)  # ADAM optimizer + weight decay
@@ -60,36 +126,43 @@ def train(train_loader, val_loader, model, loss_fn,
 
     # ----- Get the model ready ----- #
     model.to(DEVICE)  # pass it onto CUDA or CPU
-    scaler = GradScaler()  # CUDA automatic gradient scaling
+    scaler = GradScaler(device=DEVICE)  # CUDA automatic gradient scaling
 
-    tqdm_pbar = tqdm(range(num_epochs), desc='Initializing', colour='green') if use_pbar else range(num_epochs)
+    tqdm_pbar = tqdm(range(num_epochs), desc='Initializing', colour='green', file=sys.stdout) if use_pbar else range(num_epochs)
     start_time = time.time()
 
 
     # -------- Training -------- #
-    for epoch in range(num_epochs):
+    for epoch in tqdm_pbar:
         model.train()
         train_loss, val_loss = 0.0, 0.0
 
-        for i, (X_batch, y_batch, meta) in enumerate(train_loader, 0):
-            optimizer.zero_grad()  # main forward pass
-            with autocast():
-                y_pred = model(X_batch)
-                loss = loss_fn(y_pred, y_batch)
 
+
+
+        for i, (X_batch, y_batch, meta) in enumerate(train_loader):
+            X_batch, y_batch = to_device(X_batch), to_device(y_batch)
+            optimizer.zero_grad()  # main forward pass
+            with autocast(device_type=str(DEVICE)):
+                y_pred = model(X_batch, y_batch)
+                # print(y_pred)
+                loss = model.loss_fn(y_pred)
             scaler.scale(loss).backward()  # backward pass
             scaler.step(optimizer); scaler.update()
 
             train_loss += loss.item()
 
         # ----- Validation ----- #
-        model.eval()
+        # model.eval()
         with torch.no_grad():
-            for X_batch, y_batch in val_loader:
-                y_pred = model(X_batch)
-                loss = loss_fn(y_pred, y_batch)
+            for X_batch, y_batch, meta in val_loader:
+                X_batch, y_batch = to_device(X_batch), to_device(y_batch)
+
+                y_pred = model(X_batch, y_batch)
+                # print(y_pred)
+                loss = model.loss_fn(y_pred)
                 val_loss += loss.item()
-        model.train()
+        # model.train()
 
         # Get the losses & store
         train_loss /= len(train_loader)
@@ -115,8 +188,8 @@ def train(train_loader, val_loader, model, loss_fn,
 
         if use_pbar:
             tqdm_pbar.set_description(
-                f"Epoch [{epoch + 1}/{num_epochs}] Train Loss: {train_loss:.8f},"
-                f" Val Loss: {val_loss:.8f}, Early Stop: {early_stopper.counter}")
+                f"{'\033[34'}mEpoch [{epoch + 1}/{num_epochs}] Train Loss: {train_loss:.8f},"
+                f" Val Loss: {val_loss:.8f}, Early Stop: {early_stopper.counter}{'\033[0m'}")
             tqdm_pbar.update(1)
 
     # ------- Returning best model --------

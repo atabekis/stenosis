@@ -25,17 +25,16 @@ class XCAVideo:
     """
     Represents a XCA video sequence constructed from XCAImage instances
     """
-    def __init__(self, video_tensor: torch.Tensor, bboxes: torch.Tensor | None, meta: dict):
+    def __init__(self, video_tensor: torch.Tensor, bboxes: torch.Tensor, meta: dict):
         self.video_tensor = video_tensor
         self.bboxes = bboxes
         self.meta = meta
 
     def __repr__(self):
-        bbox_shape = tuple(self.bboxes.shape) if isinstance(self.bboxes, torch.Tensor) else None
         return (f"XCAVideo("
                 f"meta={self.meta}, "
                 f"tensor_shape={tuple(self.video_tensor.shape)}, "
-                f"bboxes_shape={bbox_shape})")
+                f"bboxes_shape={tuple(self.bboxes.shape)})")
 
 
 class ImageLoader(BaseEstimator, TransformerMixin):
@@ -127,16 +126,13 @@ class VideoAggregator(BaseEstimator, TransformerMixin):
         for key, frames in videos.items():
             frames_sorted = sorted(frames, key=lambda x: x[0])
             frame_list = [img for (_, img, _) in frames_sorted]
-            bbox_list  = [bbox for (_, _, bbox) in frames_sorted]
+            bbox_list = [([0, 0, 0, 0] if bbox is None else bbox) for _, _, bbox in frames_sorted]
 
-            # if all bboxes are non-none, convert them to a torch.Tensor of shape (T, 4).
-            if all(bbox is not None for bbox in bbox_list):
-                bboxes_tensor = torch.tensor(bbox_list, dtype=torch.float32)
-            else:
-                bboxes_tensor = None
-
+            bboxes_tensor = torch.tensor(bbox_list, dtype=torch.float32)
             output.append((frame_list, bboxes_tensor, meta_info[key]))
         return output
+
+
 
 class Augmenter(BaseEstimator, TransformerMixin):
     """

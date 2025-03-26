@@ -16,11 +16,14 @@ from methods.augment import DummyAugment
 from methods.loader import DatasetConstructor
 from methods.preprocess import PreprocessPipeline
 
-from methods.train import train, predict
+from methods.train import train, predict, train_simple
 
 from util import log
 from config import CADICA_DATASET_DIR
-from config import DATA_LOADER_BS, DATA_LOADER_SHUFFLE, DATA_LOADER_N_WORKERS
+from config import (DATA_LOADER_BS,
+                    DATA_LOADER_SHUFFLE,
+                    DATA_LOADER_N_WORKERS,
+                    DATA_LOADER_PIN_MEM)
 
 
 
@@ -35,6 +38,7 @@ class ReaderWrapper(BaseEstimator, TransformerMixin):
     def transform(self, X, y=None):
         reader = Reader(dataset_dir=self.dataset_dir)
         return reader.xca_images
+
 
 
 class PreprocessWrapper(BaseEstimator, TransformerMixin):
@@ -56,6 +60,7 @@ class PreprocessWrapper(BaseEstimator, TransformerMixin):
 
     def transform(self, X, y=None):
         return self.preprocess_pipeline_.split_transform(X)
+
 
 
 class StenosisPipeline:
@@ -84,31 +89,33 @@ class StenosisPipeline:
             ('loader', DatasetConstructor(mode=self.mode,
                                           batch_size=DATA_LOADER_BS,
                                           shuffle=DATA_LOADER_SHUFFLE,  # this will only affect the train loader as val & test should not be shuffled
-                                          num_workers=DATA_LOADER_N_WORKERS)),
+                                          num_workers=DATA_LOADER_N_WORKERS,
+                                          pin_memory=DATA_LOADER_PIN_MEM,
+                                          repeat_channels=True)),
         ])
 
-    def run(self):
+    def run(self, num_epochs=100, learning_rate=1e-3,  early_stop=50, verbosity=-1, use_pbar=True):
         loader_dict = self.pipeline.fit_transform(None)
         train_loader, val_loader, test_loader = loader_dict.values()
 
-        for i, (x_batch, y_batch, meta_batch) in enumerate(train_loader, 0):
-
-
-            print(f"==== INSPECTING SAMPLE {i} ====")
-            print(f"Video tensor shape:  {x_batch.shape}")
-            print(f"BBox shape:          {y_batch.shape}")
-            print(f"Metadata dictionary: {meta_batch}")
+        # for i, (x_batch, y_batch, meta_batch) in enumerate(train_loader, 0):
+        #
+        #
+        #     print(f"==== INSPECTING SAMPLE {i} ====")
+        #     print(f"Video tensor shape:  {x_batch}")
+        #     print(f"BBox shape:          {y_batch}")
+        #     print(f"Metadata dictionary: {meta_batch}")
 
 
         log(f"Starting training for model: {self.model.__class__.__name__}")
-        self.model.train_model(train_loader, val_loader)
+        results = train(train_loader, val_loader, self.model,
+                        num_epochs=num_epochs, learning_rate=learning_rate, early_stop=early_stop,
+                        verbosity=verbosity, use_pbar=use_pbar)
 
-        log(f"Evaluating '{self.model.__class__.__name__}' on the test set")
-        test_score = self.model.evaluate(test_loader)
+        # log(f"Evaluating '{self.model.__class__.__name__}' on the test set")
+        # # test_score = self.model.evaluate(test_loader)
 
-        # return loader_dict
-        return loader_dict, test_score
-
+        return results
 
 
 if __name__ == "__main__":
@@ -117,7 +124,8 @@ if __name__ == "__main__":
     pipeline = StenosisPipeline(
         dataset_dir=CADICA_DATASET_DIR,
         model=DummyTorchModel(),
-        augmentor=DummyAugment()
+        augmentor=DummyAugment(),
+
     )
-    splits, score = pipeline.run()
-    print(score)
+    results = pipeline.run()
+    print(results)
