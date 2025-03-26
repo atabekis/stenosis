@@ -1,36 +1,68 @@
 # loader.py
-
+import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
 from sklearn.base import BaseEstimator, TransformerMixin
 
 # Local imports
-from util import log
-from config import DEVICE
+from config import DEVICE, DEBUG
 
 
 def video_collate_fn(batch):
     videos, bboxes, metas = zip(*batch)
     return list(videos), list(bboxes), list(metas)
 
+def frame_collate_fn(batch):
+    frames, bboxes, metas = zip(*batch)
+    images = list(frames)
+
+    targets = [
+        {
+            "boxes": torch.empty((0, 4), dtype=torch.float32, device=bbox.device),
+            "labels": torch.empty((0,), dtype=torch.int64, device=bbox.device)
+        } if torch.sum(bbox) == 0.0 else {
+            "boxes": bbox.unsqueeze(0).float(),
+            "labels": torch.tensor([1], dtype=torch.int64, device=bbox.device)
+        }
+        for bbox in bboxes
+    ]
+    return images, targets, list(metas)
+
+    # return images, targets, list(metas)
+    # targets = []
+    # for bbox in bboxes:
+    #     if torch.sum(bbox) == 0.0:
+    #         targets.append({
+    #             "boxes": torch.tensor([0.0, 0.0, 0.0, 0.0], dtype=torch.float32, device=bbox.device),
+    #             "labels": torch.empty((0,), dtype=torch.int64, device=bbox.device)
+    #         })
+    #     else:
+    #         # Otherwise, bbox is a tensor of shape [4] with positive dimensions.
+    #         targets.append({
+    #             "boxes": bbox.unsqueeze(0).float(),  # shape becomes [1, 4]
+    #             "labels": torch.tensor([1], dtype=torch.int64, device=bbox.device)
+    #         })
+    # return images, targets, list(metas)
+
 
 
 class StenosisFrameDataset(Dataset):
     """Dataset class for --single-- frame images, alongside its metadata"""
-    def __init__(self, xca_videos):
+    def __init__(self, xca_videos, repeat_channels=False):
         super().__init__()
+        self.repeat_channels = repeat_channels
 
         self.frames = [
-            frame.to(DEVICE)
+            frame
             for vid in xca_videos
             for frame in vid.video_tensor
         ]
         self.bboxes = [
-            bbox.to(DEVICE)
+            bbox
             for vid in xca_videos
-            for bbox in (vid.bboxes if vid.bboxes is not None
-                         else torch.zeros((vid.video_tensor.shape[0], 4)))
+            for bbox in vid.bboxes
         ]
+
         self.meta = [
             {'patient_id': vid.meta.get('patient_id'), 'video_id': vid.meta.get('video_id')}
             for vid in xca_videos
@@ -41,7 +73,10 @@ class StenosisFrameDataset(Dataset):
         return len(self.frames)
 
     def __getitem__(self, idx):
-        return self.frames[idx], self.bboxes[idx], self.meta[idx]
+        frame = self.frames[idx]
+        if self.repeat_channels and frame.shape[0] == 1:
+            frame = frame.repeat(3, 1, 1)
+        return frame, self.bboxes[idx], self.meta[idx]
 
 
 
@@ -49,9 +84,10 @@ class StenosisFrameDataset(Dataset):
 
 class StenosisVideoDataset(Dataset):
     """Wrap list of XCAVideo objects in PyTorch Dataset"""
-    def __init__(self, xca_videos):
+    def __init__(self, xca_videos, repeat_channels=False):
         super().__init__()
         self.xca_videos = xca_videos
+        self.repeat_channels = repeat_channels
 
 
     def __len__(self):
@@ -61,11 +97,10 @@ class StenosisVideoDataset(Dataset):
         xca_video = self.xca_videos[idx]
         X = xca_video.video_tensor
 
-        if xca_video.bboxes is None:
-            frame_count = X.shape[0]
-            y = torch.zeros((frame_count, 4), dtype=torch.float32)
-        else:
-            y = xca_video.bboxes
+        if self.repeat_channels and X.shape[1] == 1:
+            X = X.repeat(3, 1, 1)
+
+        y = xca_video.bboxes
 
         X, y = X.to(DEVICE), y.to(DEVICE)
 
@@ -82,17 +117,17 @@ class StenosisVideoDataset(Dataset):
 
 class DatasetConstructor(BaseEstimator, TransformerMixin):
     """A pipeline object that receives a dict of splits and creates a pytorch Dataset object"""
-    def __init__(self, batch_size=4, shuffle=True, num_workers=4, mode=None):
+    def __init__(self, batch_size=4, shuffle=True, num_workers=4, pin_memory = False ,mode=None, repeat_channels=False):
         if mode is None:
             raise ValueError('Model must have a mode from [single_frame, sequence]')
 
         self.mode = mode
+        self.repeat_channels = repeat_channels
 
         self.batch_size = batch_size
         self.shuffle = shuffle
         self.num_workers = num_workers
-
-
+        self.pin_memory = pin_memory
 
 
     def fit(self, X, y=None):
@@ -101,7 +136,7 @@ class DatasetConstructor(BaseEstimator, TransformerMixin):
     def transform(self, X, y=None):
         if self.mode == 'single_frame':
             dataset_cls = StenosisFrameDataset
-            collate_fn = None
+            collate_fn = frame_collate_fn
         elif self.mode == 'sequence':
             dataset_cls = StenosisVideoDataset
             collate_fn = video_collate_fn
@@ -110,66 +145,13 @@ class DatasetConstructor(BaseEstimator, TransformerMixin):
 
         loaders = {}
         for split in ['train', 'val', 'test']:
-            dataset = dataset_cls(X[split])
+            dataset = dataset_cls(X[split], repeat_channels=self.repeat_channels)
             loaders[f'{split}_loader'] = DataLoader(
                 dataset,
                 batch_size=self.batch_size,
                 shuffle=self.shuffle if split == 'train' else False,
                 num_workers=self.num_workers,
-                collate_fn=collate_fn
+                collate_fn=collate_fn,
+                pin_memory=self.pin_memory
             )
         return loaders
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-        # train_dataset = StenosisDataset(X['train'])
-        # val_dataset = StenosisDataset(X['val'])
-        # test_dataset = StenosisDataset(X['test'])
-        #
-        # log(f"Constructing PyTorch dataset objects from XCA videos")
-        #
-        # train_loader = DataLoader(
-        #     train_dataset,
-        #     batch_size=self.batch_size,
-        #     shuffle=self.shuffle,
-        #     num_workers=self.num_workers,
-        #     collate_fn=video_collate_fn
-        # )
-        # val_loader = DataLoader(
-        #     val_dataset,
-        #     batch_size=self.batch_size,
-        #     shuffle=False,
-        #     num_workers=self.num_workers,
-        #     collate_fn=video_collate_fn
-        # )
-        # test_loader = DataLoader(
-        #     test_dataset,
-        #     batch_size=self.batch_size,
-        #     shuffle=False,
-        #     num_workers=self.num_workers,
-        #     collate_fn=video_collate_fn
-        # )
-        #
-        # return {
-        #     'train_loader': train_loader,
-        #     'val_loader':   val_loader,
-        #     'test_loader':  test_loader
-        # }
