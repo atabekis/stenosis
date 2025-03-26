@@ -1,5 +1,6 @@
 .deprecated.py
 .cache
+.backburner.txt
 
 data/CADICA/nonselectedVideos
 data/CADICA/selectedVideos
