@@ -5,6 +5,7 @@ import os
 import re
 
 import cv2
+import random
 import pandas as pd
 import concurrent.futures
 
@@ -13,6 +14,7 @@ from pathlib import WindowsPath
 
 # Local imports
 from util import log
+from config import DEBUG, DEBUG_SIZE, SEED
 from config import DANILOV_DATASET_DIR, DANILOV_DATASET_PATH, CADICA_DATASET_DIR
 
 
@@ -25,6 +27,10 @@ class Reader:
         self.xca_images = []
 
         self._which_dataset()
+
+        if DEBUG:
+            log(f'Debug mode turned on, sampling %{int(DEBUG_SIZE * 100)} of the images')
+            self.xca_images = random.sample(self.xca_images, int(len(self.xca_images) * DEBUG_SIZE))  # random.seed is set in config.py
 
     def _which_dataset(self):
         self.dataset_type = 'DANILOV' if 'DANILOV' in str(self.dataset_dir) else 'CADICA'
