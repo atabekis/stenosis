@@ -81,7 +81,7 @@ class Reader:
 
         def construct_xca(video_dir: WindowsPath, lesion: bool):
             if not lesion:  # XCAImage.bbox = None
-                selected_frames = ((video_dir / f'{video_dir.parent.name}_{video_dir.name}_SelectedFrames.txt')
+                selected_frames = ((video_dir / f'{video_dir.parent.name}_{video_dir.name}_selectedFrames.txt')
                                    .read_text().split('\n')[:-1])  # ooga-booga way of reading :)
                 selected_frames = [video_dir / "input" / f"{frame}.png" for frame in selected_frames]
 
@@ -92,7 +92,7 @@ class Reader:
                     )
 
             if lesion:  # now we have the groundTruth to deal with as well
-                selected_frames = ((video_dir / f'{video_dir.parent.name}_{video_dir.name}_SelectedFrames.txt')
+                selected_frames = ((video_dir / f'{video_dir.parent.name}_{video_dir.name}_selectedFrames.txt')
                                    .read_text().split('\n')[:-1])
                 selected_frames_paths = [video_dir / "input" / f"{frame}.png" for frame in selected_frames]
                 ground_truth_files = [video_dir / "groundtruth" / f"{frame}.txt" for frame in selected_frames]

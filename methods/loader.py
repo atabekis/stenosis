@@ -4,9 +4,9 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from sklearn.base import BaseEstimator, TransformerMixin
 
-# Local imports
-from config import DEVICE, DEBUG
-
+# HPC
+from HPC_config import get_world_size
+from torch.utils.data.distributed import DistributedSampler
 
 def video_collate_fn(batch):
     videos, bboxes, metas = zip(*batch)
@@ -22,27 +22,12 @@ def frame_collate_fn(batch):
             "labels": torch.empty((0,), dtype=torch.int64, device=bbox.device)
         } if torch.sum(bbox) == 0.0 else {
             "boxes": bbox.unsqueeze(0).float(),
-            "labels": torch.tensor([1], dtype=torch.int64, device=bbox.device)
+            "labels": torch.tensor([0], dtype=torch.int64, device=bbox.device)
         }
         for bbox in bboxes
     ]
     return images, targets, list(metas)
 
-    # return images, targets, list(metas)
-    # targets = []
-    # for bbox in bboxes:
-    #     if torch.sum(bbox) == 0.0:
-    #         targets.append({
-    #             "boxes": torch.tensor([0.0, 0.0, 0.0, 0.0], dtype=torch.float32, device=bbox.device),
-    #             "labels": torch.empty((0,), dtype=torch.int64, device=bbox.device)
-    #         })
-    #     else:
-    #         # Otherwise, bbox is a tensor of shape [4] with positive dimensions.
-    #         targets.append({
-    #             "boxes": bbox.unsqueeze(0).float(),  # shape becomes [1, 4]
-    #             "labels": torch.tensor([1], dtype=torch.int64, device=bbox.device)
-    #         })
-    # return images, targets, list(metas)
 
 
 
@@ -102,7 +87,7 @@ class StenosisVideoDataset(Dataset):
 
         y = xca_video.bboxes
 
-        X, y = X.to(DEVICE), y.to(DEVICE)
+        # X, y = X.to(DEVICE), y.to(DEVICE)
 
         meta = {
             "patient_id": xca_video.meta["patient_id"],
@@ -144,12 +129,23 @@ class DatasetConstructor(BaseEstimator, TransformerMixin):
             raise ValueError(f"Unknown mode: {self.mode}")
 
         loaders = {}
+        world_size = get_world_size() # will return either a > 1 or 1
         for split in ['train', 'val', 'test']:
             dataset = dataset_cls(X[split], repeat_channels=self.repeat_channels)
+
+            # ----- Need some logic here to handle distributed loading for the HPC cluster -------
+            if split == 'train' and world_size > 1:
+                sampler = DistributedSampler(dataset)
+                shuffle_flag = False  # the distributed sampler will handle the shuffling
+            else:
+                sampler = None
+                shuffle_flag = self.shuffle if split == 'train' else False
+            # ---- ----------------------------------------------------------------------- -------
+
             loaders[f'{split}_loader'] = DataLoader(
                 dataset,
                 batch_size=self.batch_size,
-                shuffle=self.shuffle if split == 'train' else False,
+                shuffle=shuffle_flag,
                 num_workers=self.num_workers,
                 collate_fn=collate_fn,
                 pin_memory=self.pin_memory

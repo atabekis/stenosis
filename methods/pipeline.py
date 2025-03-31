@@ -67,16 +67,16 @@ class StenosisPipeline:
     """
     This is the main wrapper class to construct an integrated pipeline for data reading, preprocessing and modeling.
     """
-    def __init__(self, dataset_dir, model: any = None, as_tensor=True, is_train=True, augmentor=None):
+    def __init__(self, dataset_dir, model: any = None, as_tensor=True, is_train=True, augmentor=None, mode=None):
         if model is None:
             raise TypeError("Model must be provided")
 
-        if model.mode not in ['single_frame', 'sequence']:
+        if mode not in ['single_frame', 'sequence'] or mode is None:
             raise ValueError("Model must be either 'single_frame' or 'sequence'")
 
         self.dataset_dir = dataset_dir
         self.model = model
-        self.mode = model.mode
+        self.mode = mode
         self.as_tensor = as_tensor
         self.is_train = is_train
         self.augmentor = augmentor if augmentor is not None else DummyAugment()
@@ -113,7 +113,6 @@ class StenosisPipeline:
                         verbosity=verbosity, use_pbar=use_pbar)
 
         # log(f"Evaluating '{self.model.__class__.__name__}' on the test set")
-        # # test_score = self.model.evaluate(test_loader)
 
         return results
 
