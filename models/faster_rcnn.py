@@ -132,8 +132,8 @@ class FasterRCNNLightningModule(pl.LightningModule):
         losses = sum(loss for loss in loss_dict.values())
 
         self.log_dict({f"train/{k}": v for k, v in loss_dict.items()}, on_step=True, on_epoch=True,
-                      batch_size=len(images))
-        self.log("train/loss", losses, on_step=True, on_epoch=True, prog_bar=True, batch_size=len(images))
+                      batch_size=len(images), sync_dist=True)
+        self.log("train/loss", losses, on_step=True, on_epoch=True, prog_bar=True, batch_size=len(images), sync_dist=True)
 
         return losses
 
@@ -155,13 +155,13 @@ class FasterRCNNLightningModule(pl.LightningModule):
         self.model.eval()
 
         losses = sum(loss for loss in loss_dict.values())
-        self.log("val/loss", losses, on_epoch=True, prog_bar=True, batch_size=len(images))
+        self.log("val/loss", losses, on_epoch=True, prog_bar=True, batch_size=len(images), sync_dist=True)
 
-        self.log("val_loss", losses, on_epoch=True, prog_bar=True, batch_size=len(images))
+        self.log("val_loss", losses, on_epoch=True, prog_bar=True, batch_size=len(images), sync_dist=True)
 
     def on_validation_epoch_end(self):
         val_results = self.val_metrics.compute()
-        self.log_dict({f"val/{k}": v for k, v in val_results.items()}, prog_bar=True)
+        self.log_dict({f"val/{k}": v for k, v in val_results.items()}, prog_bar=True, sync_dist=True)
         self.val_metrics.reset()
 
     def test_step(self, batch, batch_idx):

@@ -7,6 +7,7 @@ from typing import List, Optional, Union
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
+from pytorch_lightning.strategies import DDPStrategy
 
 from methods.module import XCADataModule
 from methods.reader import XCAImage, XCAVideo
@@ -16,6 +17,7 @@ from config import (
     TRAIN_SIZE, VAL_SIZE, TEST_SIZE,
 )
 
+from lightning_fabric.plugins.environments import LightningEnvironment
 
 def train_model(
         data_list: list[Union['XCAImage', 'XCAVideo']],
@@ -29,6 +31,7 @@ def train_model(
         normalize_params: dict[str, Union[float, int]] = None,
         train_val_test_split: tuple[float, float, float] = (TRAIN_SIZE, VAL_SIZE, TEST_SIZE),
         gpus: Optional[Union[int, List[int]]] = None,
+        accumulate_grad_batches: int = 1,
         strategy: Optional[str] = None,
         save_dir: WindowsPath | str = MODEL_CHECKPOINTS_DIR,
         log_dir: str = LOGS_DIR,
@@ -45,6 +48,7 @@ def train_model(
     :param strategy: distributed training strategy {'ddp', 'ddp_spawn', etc.} passed onto Trainer
     :param save_dir: directory to save checkpoints
     :param log_dir: directory to save tensorboard logs
+    :param accumulate_grad_batches: number of batches to accumulate for larger effective batch size
     :return: trained model
     """
 
@@ -82,12 +86,16 @@ def train_model(
 
     logger = TensorBoardLogger(log_dir, name=model.__class__.__name__)
 
+    if strategy == 'ddp':
+        strategy = DDPStrategy(find_unused_parameters=True)
+
     trainer_kwargs = {
         'max_epochs': max_epochs,
         'callbacks': [checkpoint_callback, early_stop_callback, ],
         'logger': logger,
         'log_every_n_steps': 10,
         'deterministic': False,
+        'accumulate_grad_batches': accumulate_grad_batches,
     }
 
     if gpus is None:
@@ -96,13 +104,10 @@ def train_model(
         trainer_kwargs['accelerator'], trainer_kwargs['devices'] = 'gpu', gpus
 
 
-    if strategy or (isinstance(gpus, (list, int)) and (isinstance(gpus, list) and len(gpus) > 1 or isinstance(gpus, int) and gpus > 1)):
-        trainer_kwargs['strategy'] = strategy or 'ddp'
-
-        if 'accumulate_grad_batches' not in trainer_kwargs:
-            # TODO: check: calculating appropriate gradient accumulation based on original batch size
-            # trainer_kwargs['accumulate_grad_batches'] = original_batch_size // (batch_size * num_gpus)
-            pass
+    if strategy:
+        trainer_kwargs['strategy'] = strategy
+    elif isinstance(gpus, (list, int)) and (isinstance(gpus, list) and len(gpus) > 1 or isinstance(gpus, int) and gpus > 1):
+        trainer_kwargs['strategy'] = DDPStrategy(find_unused_parameters=True)
 
 
     trainer = pl.Trainer(**trainer_kwargs)
