@@ -40,18 +40,26 @@ if __name__ == '__main__':
     pl.seed_everything(SEED); random.seed(SEED); np.random.seed(SEED); torch.manual_seed(SEED)
     torch.set_float32_matmul_precision('high')
 
-    if args.gpus and args.gpus.strip():
+    if args.gpus == 'auto':
+        gpu_ids = None
+    elif args.gpus and args.gpus.strip():
         gpu_ids = [int(x) for x in args.gpus.split(',')]
     else:
-        gpu_ids = None  # Auto-detect
+        gpu_ids = None
+
 
     strategy = args.strategy
     if strategy is None and gpu_ids and len(gpu_ids) > 1:
-        strategy = 'ddp'  # default to DDP for multi-gpu
+        strategy = 'ddp'
 
     effective_batch_size = 32
-    num_gpus = len(gpu_ids) if gpu_ids else 1
+    if gpu_ids is None:
+        import torch
+        num_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 1
+    else:
+        num_gpus = len(gpu_ids) if gpu_ids else 1
     accumulate_grad_batches = max(1, effective_batch_size // (args.batch_size * num_gpus))
+
 
     config = {
         'batch_size': args.batch_size,
