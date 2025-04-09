@@ -3,18 +3,22 @@
 # Python imports
 import os
 import re
+from collections import defaultdict
 
 import cv2
 import random
+
+import numpy as np
 import pandas as pd
 import concurrent.futures
 
 from typing import Union
 from pathlib import WindowsPath
 
+import config
 # Local imports
 from util import log
-from config import DEBUG, DEBUG_SIZE, SEED
+from config import DEBUG, DEBUG_SIZE, DEFAULT_WIDTH, DEFAULT_HEIGHT
 from config import DANILOV_DATASET_DIR, DANILOV_DATASET_PATH, CADICA_DATASET_DIR
 
 
@@ -105,7 +109,7 @@ class Reader:
                         XCAImage.from_cadica(frame_path, annotation=annotation)
                     )
 
-        log("Building XCA images from the CADICA dataset")
+        log("Building XCA images from the CADICA dataset...")
 
         # Extract all lesion/nonlesion videos for each patient
         lesion_videos, nonlesion_videos = map(list, zip(*[classify_videos(patient) for patient in selected_patients]))
@@ -185,6 +189,88 @@ class Reader:
                 )
 
         return random.choice(subset)
+
+
+
+    def construct_videos(self, default_width=DEFAULT_WIDTH, default_height=DEFAULT_HEIGHT):
+        """Group XCAImage instances by patient_id and video_id to construct XCAVideo objects"""
+
+        log("Constructing XCAVideo sequences from XCA images...")
+
+        videos_dict = defaultdict(list)
+        # first we group images by pid, vid
+        for image in self.xca_images:
+            key = (image.patient_id, image.video_id)
+            videos_dict[key].append(image)
+
+        for key in videos_dict:
+            videos_dict[key].sort(key=lambda x: x.frame_nr)  # sort frames by frame_nr
+
+        videos = []
+
+        def process_video(key_frames):
+            (patient_id, video_id), frames = key_frames
+            frame_count = len(frames)
+
+            frames_array = np.zeros((frame_count, 1, default_width, default_height), dtype=np.uint8)  # all images to be resized to 512x512
+            original_dimensions = [(frame.width, frame.height) for frame in frames]
+
+            has_bbox = all(frame.bbox is not None for frame in frames)
+            bboxes_array = np.zeros((frame_count, 4), dtype=np.int32) if has_bbox else None
+
+            # fill the arrays
+            for i, frame in enumerate(frames):
+                img = frame.get_image()
+
+                if img.ndim == 3:  # redundancy: check if RGB, if so convert to grayscale
+                    img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+                if img.shape[0] != default_width or img.shape[1] != default_height:  # scale the images to 512x512 (for DANILOV only)
+                    scale_factor = min(default_width / img.shape[1], default_height / img.shape[0])
+                    width, height = int(img.shape[1] * scale_factor), int(img.shape[0] * scale_factor)
+
+                    img_resized = cv2.resize(img, (width, height), interpolation=cv2.INTER_AREA)
+
+                    canvas = np.zeros((default_width, default_height), dtype=np.uint8) # create blank canvas
+                    x_offset, y_offset = (default_width - width) // 2, (default_height - height) // 2  # calculate where to place resized img
+                    canvas[y_offset:y_offset + height, x_offset:x_offset + width] = img_resized
+                    img = canvas
+
+                    # finally, we also need to adjust the bounding box if resized
+                    if has_bbox and frame.bbox:
+                        # original_width, original_height = frame.width, frame.height
+                        if isinstance(frame.bbox[0], tuple) and len(frame.bbox) > 0:  # for danilov there might be multiple bounding boxes (one image)
+                            xmin, ymin, xmax, ymax = frame.bbox[0]
+                        else:
+                            xmin, ymin, xmax, ymax = frame.bbox
+
+                        xmin_scaled = int(xmin * scale_factor) + x_offset
+                        ymin_scaled = int(ymin * scale_factor) + y_offset
+                        xmax_scaled = int(xmax * scale_factor) + x_offset
+                        ymax_scaled = int(ymax * scale_factor) + y_offset
+                        bboxes_array[i] = [xmin_scaled, ymin_scaled, xmax_scaled, ymax_scaled]
+                else:
+                    if has_bbox and frame.bbox:
+
+                        if isinstance(frame.bbox[0], tuple) and len(frame.bbox) > 0:
+                            # danilov has multiple bboxes, take the first one
+                            bboxes_array[i] = np.array(frame.bbox[0])
+                        else:
+                            bboxes_array[i] = np.array(frame.bbox)
+
+                frames_array[i, 0] = img
+            video = XCAVideo(patient_id, video_id, frames_array, bboxes_array, original_dimensions)
+
+            for frame in frames:
+                if frame.stenosis_severity is not None:
+                    video.stenosis_severity = frame.stenosis_severity
+                    break
+
+            return video
+
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            videos = list(executor.map(process_video, videos_dict.items()))
+        return sorted(videos, key=lambda v: (v.patient_id, v.video_id))
 
 
     def __repr__(self):
@@ -314,10 +400,35 @@ class XCAImage:
 
 
 
+class XCAVideo:
+    """
+    Represents a sequence of consequent XCAImage instances from the same patient and video
+    """
+    def __init__(self, patient_id, video_id, frames, bboxes, original_dimensions=None):
+        self.patient_id, self.video_id = patient_id, video_id
+        self.frames, self.bboxes = frames, bboxes  # frames=[frame_count, 1, width, height], bboxes=[frame_count, 4] or None
+
+        self.frame_count = frames.shape[0]
+        self.has_lesion = bboxes is not None
+        self.original_dimensions = original_dimensions
+
+        self.stenosis_severity = None  # will extract severity from the first frame (if any)
+
+    def __repr__(self):
+        shape_str = f"{self.frames.shape[2]}x{self.frames.shape[3]}"
+        return (f"XCAVideo(patient_id={self.patient_id}, video_id={self.video_id}, "
+                f"frame_count={self.frame_count}, shape={shape_str}, has_lesion={self.has_lesion}, "
+                f"stenosis_severity={self.stenosis_severity})")
+
+
+
+
 
 if __name__ == "__main__":
     reader = Reader(dataset_dir=CADICA_DATASET_DIR)
-    random_image = reader.get()
-    print(random_image)
+    # print(len(reader.xca_images))
+    videos = reader.construct_videos()
+    # print(len(videos))
+
 
 
