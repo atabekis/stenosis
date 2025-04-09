@@ -13,6 +13,12 @@ data/DANILOV/timing_val.xlsx
 data/DANILOV/test_labels.csv
 data/DANILOV/train_labels.csv
 
+logs/*
+!logs/.gitkeep
+
+model_checkpoints/*
+!model_checkpoints/.gitkeep
+
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

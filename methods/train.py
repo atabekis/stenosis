@@ -1,265 +1,112 @@
 # train.py
-
-# Python imports
-import time
-
-
-import numpy as np
-from tqdm import tqdm
+from pathlib import WindowsPath
+# Pyton imports
+from typing import List, Optional, Union
 
 # Torch imports
-import torch
-import torch.nn as nn
-import torch.optim as optim
-import torch.distributed as dist
+import pytorch_lightning as pl
+from pytorch_lightning.loggers import TensorBoardLogger
+from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 
-if torch.__version__ < '2.6.0':  # so that these two works with the HPC
-    from torch.cuda.amp import GradScaler, autocast
-    version_flag = True  # we will need to set for GradScaler and autocast in the functions
-else:
-    from torch.amp import GradScaler, autocast
-    version_flag = False
+from methods.module import XCADataModule
+from methods.reader import XCAImage, XCAVideo
 
-
-# Local imports
-from config import DEVICE
-from util import log, to_numpy, to_device
-
-from HPC_config import get_local_rank, get_world_size, get_rank, get_gpus_per_node
+from config import (
+    MODEL_CHECKPOINTS_DIR, LOGS_DIR,
+    TRAIN_SIZE, VAL_SIZE, TEST_SIZE,
+)
 
 
-
-class EarlyStopping:
-    def __init__(self, tolerance=30, delta=0.001):
-        self.tolerance = tolerance  # halts the training if the val_loss hasn't improved after the tolerance
-        self.delta = delta  # minimum change in the loss to qualify as an improvement
-        self.counter = 0
-        self.early_stop = False
-        self.best_score = None
-
-    def __call__(self, val_loss):
-        score = -val_loss
-        if self.best_score is None:
-            self.best_score = score
-        elif (self.tolerance > 0) and (score < self.best_score + self.delta):  # when tolerance is negative early stopping is turned off
-            self.counter += 1
-            if self.counter >= self.tolerance:
-                self.early_stop = True
-        else:
-            self.best_score = score
-            self.counter = 0
-
-
-def train(train_loader, val_loader, model,
-          num_epochs=100, learning_rate=1e-3, early_stop=50,
-          verbosity=-1, use_pbar=True):
+def train_model(
+        data_list: list[Union['XCAImage', 'XCAVideo']],
+        model,
+        lightning_module,
+        batch_size: int = 8,
+        max_epochs: int = 50,
+        use_augmentation: bool = True,
+        num_workers: int = 4,
+        repeat_channels: bool = True,
+        normalize_params: dict[str, Union[float, int]] = None,
+        train_val_test_split: tuple[float, float, float] = (TRAIN_SIZE, VAL_SIZE, TEST_SIZE),
+        gpus: Optional[Union[int, List[int]]] = None,
+        strategy: Optional[str] = None,
+        save_dir: WindowsPath | str = MODEL_CHECKPOINTS_DIR,
+        log_dir: str = LOGS_DIR,
+):
     """
-    Main training logic for a given model, see README.md for more details.
+    Train given model, supports single and multi-gpu
+    :param data_list: list of XCAImage or XCAVideo objects
+    :param batch_size: batch size for training (per gpu)
+    :param max_epochs: maximum number of training epochs
+    :param use_augmentation: whether to use augmentation
+    :param num_workers: number of cores/workers for data loaders
+    :param train_val_test_split: ratio of train/val/test split
+    :param gpus: number of GPUs to use or list of GPU indices
+    :param strategy: distributed training strategy {'ddp', 'ddp_spawn', etc.} passed onto Trainer
+    :param save_dir: directory to save checkpoints
+    :param log_dir: directory to save tensorboard logs
+    :return: trained model
     """
 
-    # ---- Initialize variables of interest and history ----- #
-    train_hist, val_hist = [], []
-    best_loss, best_weights = np.inf, None
-
-    # ----- Initialize the methods ------- #
-    early_stopper = EarlyStopping(tolerance=early_stop, delta=0.001)  # initialize the early stopping logic
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-5)  # ADAM optimizer + weight decay
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.01, patience=10, min_lr=1e-6)  # actively updating the learning rate
-
-
-    # ----- Get the model ready ----- #
-    model.to(DEVICE)  # pass it onto CUDA or CPU
-    scaler = GradScaler(device=DEVICE if version_flag else None)  # CUDA automatic gradient scaling
-
-    tqdm_pbar = tqdm(range(num_epochs), desc='Initializing', colour='green') if use_pbar else range(num_epochs)
-    start_time = time.time()
+    data_module = XCADataModule(
+        data_list=data_list,
+        batch_size=batch_size,
+        num_workers=num_workers,
+        train_val_test_split=train_val_test_split,
+        use_augmentation=use_augmentation,
+        repeat_channels=repeat_channels,
+        normalize_params=normalize_params
+    )
 
 
-    # -------- Training -------- #
-    for epoch in tqdm_pbar:
-        model.train()
-        train_loss, val_loss = 0.0, 0.0
+    save_dir = save_dir / ("augmented" if use_augmentation else "unaugmented")
 
-        for i, (X_batch, y_batch, meta) in enumerate(train_loader):
-            X_batch, y_batch = to_device(X_batch), to_device(y_batch)
-            optimizer.zero_grad()  # main forward pass
-            with autocast(device_type=str(DEVICE) if version_flag else None):
-                y_pred = model(X_batch, y_batch)
-                # print(y_pred)
-                loss = model.loss_fn(y_pred)
-            scaler.scale(loss).backward()  # backward pass
-            scaler.step(optimizer); scaler.update()
+    checkpoint_callback = ModelCheckpoint(
+        dirpath= save_dir,
+        filename= model.__class__.__name__ + '-{epoch:02d}-{val_loss:.4f}',
+        save_top_k=3,
+        verbose=True,
+        monitor='val_loss',
+        mode='min',
+        save_on_train_epoch_end=False,
+        every_n_epochs=1,
+        save_last=True,
+    )
 
-            train_loss += loss.item()
+    early_stop_callback = EarlyStopping(
+        monitor='val_loss',
+        patience=10,
+        verbose=True,
+        mode='min',
+    )
 
-        # ----- Validation ----- #
-        # model.eval()
-        with torch.no_grad():
-            for X_batch, y_batch, meta in val_loader:
-                X_batch, y_batch = to_device(X_batch), to_device(y_batch)
+    logger = TensorBoardLogger(log_dir, name=model.__class__.__name__)
 
-                y_pred = model(X_batch, y_batch)
-                # print(y_pred)
-                loss = model.loss_fn(y_pred)
-                val_loss += loss.item()
-        # model.train()
-
-        # Get the losses & store
-        train_loss /= len(train_loader)
-        val_loss /= len(val_loader)
-        train_hist.append(train_loss)
-        val_hist.append(val_loss)
-
-        scheduler.step(val_loss)  # update learning rate
-
-        # ------- EarlyStopping -------#
-        if val_loss < best_loss:  # getting the best model alongside early stopping
-            best_loss = val_loss
-            best_weights = model.state_dict()
-
-        early_stopper(val_loss)
-        if early_stopper.early_stop:
-            log(f'Early stopping at epoch {epoch}, validation loss: {val_loss:.8f}')
-            break
-
-        # -------- Printing --------- #
-        if (verbosity > 0) and (epoch % verbosity == 0):
-            log(f"Epoch [{epoch}/{num_epochs}] Train Loss: {train_loss:.8f}, Validation Loss: {val_loss:.8f}")
-
-        if use_pbar:
-            tqdm_pbar.set_description(
-                f"Epoch [{epoch + 1}/{num_epochs}] Train Loss: {train_loss:.8f},"
-                f" Val Loss: {val_loss:.8f}, Early Stop: {early_stopper.counter}")
-            tqdm_pbar.update(1)
-
-    # ------- Returning best model --------
-    if best_weights is not None:
-        model.load_state_dict(best_weights)
-        if use_pbar and (verbosity < 0):
-            log(f'Returning the best model with validation loss: {best_loss:.4f}')
-
-    # return (best) model parameters alongside train & val history
-    return {
-        'model_name': model.__class__.__name__, 'model': model,
-        'train_hist': train_hist, 'val_hist': val_hist,
-        'time_took': time.time() - start_time
+    trainer_kwargs = {
+        'max_epochs': max_epochs,
+        'callbacks': [checkpoint_callback, early_stop_callback, ],
+        'logger': logger,
+        'log_every_n_steps': 10,
+        'deterministic': False,
     }
 
+    if gpus is None:
+        trainer_kwargs['accelerator'], trainer_kwargs['devices'] = 'auto', 'auto'
+    else:
+        trainer_kwargs['accelerator'], trainer_kwargs['devices'] = 'gpu', gpus
 
 
-def train_hpc(train_loader, val_loader, model,
-              num_epochs=100, learning_rate=1e-3, early_stop=50,
-              verbosity=-1, use_pbar=True):
-    world_size, rank, gpus_per_node = get_world_size(), get_rank(), get_gpus_per_node()
+    if strategy or (isinstance(gpus, (list, int)) and (isinstance(gpus, list) and len(gpus) > 1 or isinstance(gpus, int) and gpus > 1)):
+        trainer_kwargs['strategy'] = strategy or 'ddp'
 
-    if rank == 0:
-        log(f"Is group initialized? {dist.is_initialized()}")
-
-    local_rank = rank - gpus_per_node * (rank // gpus_per_node)
-
-    torch.cuda.set_device(local_rank)
-    dist.init_process_group(backend='nccl', init_method='env://')
-
-    model = model.to(local_rank)
-    model = nn.parallel.DistributedDataParallel(model, device_ids=[local_rank])
+        if 'accumulate_grad_batches' not in trainer_kwargs:
+            # TODO: check: calculating appropriate gradient accumulation based on original batch size
+            # trainer_kwargs['accumulate_grad_batches'] = original_batch_size // (batch_size * num_gpus)
+            pass
 
 
-    # ---- Initialize variables of interest and history ----- #
-    train_hist, val_hist = [], []
-    best_loss, best_weights = np.inf, None
+    trainer = pl.Trainer(**trainer_kwargs)
+    trainer.fit(lightning_module, data_module)
+    trainer.test(lightning_module, data_module)
+    return lightning_module
 
-    # ----- Initialize the methods ------- #
-    early_stopper = EarlyStopping(tolerance=early_stop, delta=0.001)  # initialize the early stopping logic
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-5)  # ADAM optimizer + weight decay
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.01, patience=10, min_lr=1e-6)  # actively updating the learning rate
-    scaler = GradScaler(device=DEVICE if version_flag else None)  # CUDA automatic gradient scaling
-
-    sampler = train_loader.sampler if hasattr(train_loader, 'sampler') else None
-
-    tqdm_pbar = tqdm(range(num_epochs), desc='Initializing', colour='green') if use_pbar else range(num_epochs)
-    start_time = time.time()
-
-    device = torch.device(f"cuda:{local_rank}")
-
-    # -------- Training -------- #
-    for epoch in tqdm_pbar:
-        model.train()
-        train_loss, val_loss = 0.0, 0.0
-        if sampler is not None:
-            sampler.set_epoch(epoch)
-            for i, (X_batch, y_batch, meta) in enumerate(train_loader):
-                X_batch, y_batch = to_device(X_batch, device=device), to_device(y_batch, device=device)
-                optimizer.zero_grad()  # main forward pass
-                with autocast(device_type=str(DEVICE) if version_flag else None):
-                    y_pred = model(X_batch, y_batch)
-                    # print(y_pred)
-                    loss = model.loss_fn(y_pred)
-                scaler.scale(loss).backward()  # backward pass
-                scaler.step(optimizer); scaler.update()
-
-                train_loss += loss.item()
-
-            # ----- Validation ----- #
-            # model.eval()
-            with torch.no_grad():
-                for X_batch, y_batch, meta in val_loader:
-                    X_batch, y_batch = to_device(X_batch), to_device(y_batch)
-
-                    y_pred = model(X_batch, y_batch)
-                    # print(y_pred)
-                    loss = model.loss_fn(y_pred)
-                    val_loss += loss.item()
-            # model.train()
-
-            # Get the losses & store
-            train_loss /= len(train_loader)
-            val_loss /= len(val_loader)
-            train_hist.append(train_loss)
-            val_hist.append(val_loss)
-
-            scheduler.step(val_loss)  # update learning rate
-
-            # ------- EarlyStopping -------#
-            if val_loss < best_loss:  # getting the best model alongside early stopping
-                best_loss = val_loss
-                best_weights = model.state_dict()
-
-            early_stopper(val_loss)
-            if early_stopper.early_stop:
-                log(f'Early stopping at epoch {epoch}, validation loss: {val_loss:.8f}')
-                break
-
-            # -------- Printing --------- #
-            if (verbosity > 0) and (epoch % verbosity == 0) and rank == 0:
-                log(f"Epoch [{epoch}/{num_epochs}] Train Loss: {train_loss:.8f}, Validation Loss: {val_loss:.8f}")
-
-            if use_pbar:
-                tqdm_pbar.set_description(
-                    f"Epoch [{epoch + 1}/{num_epochs}] Train Loss: {train_loss:.8f},"
-                    f" Val Loss: {val_loss:.8f}, Early Stop: {early_stopper.counter}")
-                tqdm_pbar.update(1)
-
-        # ------- Returning best model --------
-        if best_weights is not None:
-            model.load_state_dict(best_weights)
-            if use_pbar and (verbosity < 0):
-                log(f'Returning the best model with validation loss: {best_loss:.4f}')
-
-        dist.destroy_process_group()
-
-        # return (best) model parameters alongside train & val history
-        return {
-            'model_name': model.__class__.__name__, 'model': model,
-            'train_hist': train_hist, 'val_hist': val_hist,
-            'time_took': time.time() - start_time
-        }
-
-
-
-
-
-
-def predict(model, validation_tensor):
-    with torch.no_grad():
-        y_pred = model(validation_tensor.to(DEVICE))
-        return np.array(to_numpy(y_pred))
