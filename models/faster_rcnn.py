@@ -7,9 +7,9 @@ from typing import Dict, List, Optional
 import torch
 import torch.nn as nn
 from torch.optim import Adam
+from torchvision.models.detection.rpn import AnchorGenerator
 from torchvision.models.detection import fasterrcnn_resnet50_fpn
-from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
-from torchvision.models.detection.faster_rcnn import FasterRCNN_ResNet50_FPN_Weights
+from torchvision.models.detection.faster_rcnn import FastRCNNPredictor, FasterRCNN_ResNet50_FPN_Weights
 import pytorch_lightning as pl
 
 from util import log
@@ -27,8 +27,8 @@ class FasterRCNN(nn.Module):
             num_classes: int = NUM_CLASSES,
             pretrained: bool = True,
             trainable_backbone_layers: int = 3,
-            min_size: int = 512,
-            max_size: int = 1024,
+            min_size: int = 1024,
+            max_size: int = 1536,
             image_mean: Optional[List[float]] = None,
             image_std: Optional[List[float]] = None,
     ):
@@ -50,6 +50,7 @@ class FasterRCNN(nn.Module):
         if image_std is None:
             image_std = [0.229, 0.224, 0.225]
 
+
         self.model = fasterrcnn_resnet50_fpn(
             weights=FasterRCNN_ResNet50_FPN_Weights.DEFAULT if pretrained else None,
             trainable_backbone_layers=trainable_backbone_layers,
@@ -59,7 +60,29 @@ class FasterRCNN(nn.Module):
             image_std=image_std,
         )
 
-        # new classifier for specific number of classes
+        anchor_sizes = ((8,), (16,), (32,), (64,), (128,))  # smaller anchor sizes since i have very small bboxes
+        aspect_ratios = ((0.5, 1.0, 2.0),) * len(anchor_sizes)
+        anchor_generator = AnchorGenerator(
+            sizes=anchor_sizes,
+            aspect_ratios=aspect_ratios
+        )
+        self.model.rpn.anchor_generator = anchor_generator
+
+        # increase proposals to ensure small objects are captured
+        self.model.rpn.pre_nms_top_n_train = 3000
+        self.model.rpn.post_nms_top_n_train = 1500
+        self.model.rpn.pre_nms_top_n_test = 1500
+        self.model.rpn.post_nms_top_n_test = 1000
+
+        # adjust nms threshold - better handling of small objects
+        self.model.rpn.nms_thresh = 0.75
+
+        self.model.roi_heads.score_thresh = 0.01  # very low threshold to ensure detection
+        self.model.roi_heads.nms_thresh = 0.3  # higher nms to avoid duplicate predictions
+        self.model.roi_heads.detections_per_img = 1  # only one object per image
+
+        self.model.rpn.fg_bg_sampler.positive_fraction = 0.8 # increase positive fraction to focus more on the small object
+
         in_features = self.model.roi_heads.box_predictor.cls_score.in_features
         self.model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
 
@@ -113,16 +136,42 @@ class FasterRCNNLightningModule(pl.LightningModule):
 
         self.val_loss = None
 
+
     def forward(self, images: List[torch.Tensor], targets: Optional[List[Dict[str, torch.Tensor]]] = None):
         return self.model(images, targets)
 
+
     def configure_optimizers(self):
         """Configure Adam optimizer with weight decay"""
-        return Adam(
-            self.parameters(),
+
+        optimizer = Adam(
+            self.model.parameters(),
             lr=self.learning_rate,
-            weight_decay=self.weight_decay
+            weight_decay=self.weight_decay,
         )
+        # one-cycle scheduler works better with obj detection
+        scheduler = torch.optim.lr_scheduler.OneCycleLR(
+            optimizer,
+            max_lr=self.learning_rate * 10,
+            total_steps=self.trainer.estimated_stepping_batches,
+            pct_start=0.1,
+            div_factor=10.0,
+            final_div_factor=1000.0,
+            three_phase=True,
+        )
+        return {
+            'optimizer': optimizer,
+            'lr_scheduler': {
+                'scheduler': scheduler,
+                'interval': 'step',
+            }
+        }
+
+        # return Adam(
+        #     self.parameters(),
+        #     lr=self.learning_rate,
+        #     weight_decay=self.weight_decay
+        # )
 
     def training_step(self, batch, batch_idx):
         images, targets, _ = batch
@@ -157,7 +206,7 @@ class FasterRCNNLightningModule(pl.LightningModule):
         losses = sum(loss for loss in loss_dict.values())
         self.log("val/loss", losses, on_epoch=True, prog_bar=True, batch_size=len(images), sync_dist=True)
 
-        self.log("val_loss", losses, on_epoch=True, prog_bar=True, batch_size=len(images), sync_dist=True)
+        self.log("val_loss", losses, on_epoch=True, prog_bar=False, batch_size=len(images), sync_dist=True)
 
     def on_validation_epoch_end(self):
         val_results = self.val_metrics.compute()

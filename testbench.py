@@ -74,7 +74,7 @@ if __name__ == '__main__':
     }
 
     log(f"Training configuration:")
-    log(f"  GPUs: {gpu_ids}")
+    log(f"  GPUs: {((torch.cuda.get_device_name(device) for device in gpu_ids) if gpu_ids else torch.cuda.get_device_name())}")
     log(f"  Strategy: {strategy}")
     log(f"  Batch size per GPU: {args.batch_size}")
     log(f"  Effective batch size: {args.batch_size * num_gpus * accumulate_grad_batches}")
@@ -107,8 +107,8 @@ if __name__ == '__main__':
     # Create the Lightning module
     lightning_module = FasterRCNNLightningModule(
         model=model,
-        learning_rate=1e-3,
-        weight_decay=0.0005
+        learning_rate=1e-4,
+        weight_decay=0.0001
     )
 
     trained_model = train_model(
