@@ -72,6 +72,6 @@ def image_to_gif(xca_images, output_path="output.gif", overlay=True, fps=1):
 
 
 if __name__ == "__main__":
-    r = Reader(dataset_dir=DANILOV_DATASET_DIR)
+    r = Reader(dataset_dir=CADICA_DATASET_DIR)
     ins = r.get(lesion=True)
     show_xca_image(ins)

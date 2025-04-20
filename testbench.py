@@ -12,7 +12,7 @@ from methods.train import train_model
 from config import (
     SEED,
     NUM_CLASSES,
-    CADICA_DATASET_DIR,
+    CADICA_DATASET_DIR, DEBUG,
 )
 
 from models.faster_rcnn import FasterRCNN, FasterRCNNLightningModule
@@ -28,7 +28,7 @@ if __name__ == '__main__':
                         choices=['ddp', 'ddp_spawn', 'deepspeed', 'fsdp', None],
                         help='Distributed training strategy')
     parser.add_argument('--max_epochs', type=int, default=100, help='Maximum training epochs')
-    parser.add_argument('--use_augmentation', action='store_true', help='Use data augmentation')
+    parser.add_argument('--use_augmentation', action='store_true', default=True if not DEBUG else False, help='Use data augmentation')
     parser.add_argument('--num_workers', type=int, default=8, help='Number of dataloader workers')
     args = parser.parse_args()
 
@@ -76,6 +76,7 @@ if __name__ == '__main__':
     log(f"Training configuration:")
     log(f"  GPUs: {((torch.cuda.get_device_name(device) for device in gpu_ids) if gpu_ids else torch.cuda.get_device_name())}")
     log(f"  Strategy: {strategy}")
+    log(f"  Using augmentation: {args.use_augmentation}")
     log(f"  Batch size per GPU: {args.batch_size}")
     log(f"  Effective batch size: {args.batch_size * num_gpus * accumulate_grad_batches}")
     log(f"  Gradient accumulation steps: {accumulate_grad_batches}")

@@ -7,9 +7,13 @@ from typing import Optional, Union
 # Torch imports
 import torch
 from torch.utils.data import Dataset
-import torchvision.transforms.v2 as T
+# import torchvision.transforms.v2 as T
+
+import albumentations as A
+from albumentations.pytorch import ToTensorV2
 
 # Local imports
+from util import to_numpy
 from config import CADICA_DATASET_DIR
 from methods.reader import Reader, XCAImage, XCAVideo
 
@@ -23,7 +27,7 @@ class XCADataset(Dataset):
     def __init__(
             self,
             data_list: list[Union['XCAImage', 'XCAVideo']],
-            transform: Optional[T.Compose] = None,
+            transform: Optional[A.Compose] = None,
             use_augmentation: bool = False,
             is_train: bool = False,
             normalize_params: dict[str, float] = None,
@@ -51,25 +55,31 @@ class XCADataset(Dataset):
         else:
             self.normalize_params = normalize_params or {'mean': 0.5, 'std': 0.5}
 
-        # make into tensor and normalize
-        transform_list = [
-            T.ToImage(),
-            T.ToDtype(torch.float32, scale=True),
-            T.Normalize(mean=[self.normalize_params['mean']], std=[self.normalize_params['std']])
-        ]
+
+        # define base transforms
+        self.base_transform = A.Compose([
+            A.Normalize(mean=self.normalize_params['mean'], std=self.normalize_params['std']),
+            ToTensorV2()
+        ])
 
         if self.use_augmentation:
-            augment_transforms = [
-                T.RandomHorizontalFlip(p=0.5),
-                T.RandomVerticalFlip(p=0.3),
-                T.GaussianNoise()
-            ]
-            transform_list += augment_transforms
+            self.augment_transform = A.Compose([
+                A.RandomBrightnessContrast(p=0.5),
+                A.HorizontalFlip(p=0.5),
+                A.VerticalFlip(p=0.2),
+                A.GaussNoise(p=0.5)
+            ], bbox_params=A.BboxParams(
+                format='pascal_voc',  # [x_min, y_min, x_max, y_max]
+                label_fields=['labels']
+            ))
+        else:
+            self.augment_transform = None
 
-        self.transform = T.Compose(transform_list)
+        self.transform_applied = False
 
         if self.using_video_format:
             self._create_frame_index()
+
 
 
     def _create_frame_index(self):
@@ -110,90 +120,80 @@ class XCADataset(Dataset):
 
 
     def __getitem__(self, idx):
-        """
-        We will split this into two (1) if using video format and (2) is image format
-        """
+        self.transform_applied = False
+
+        # select data source
         if self.using_video_format:
-            video_idx, frame_idx = self.frame_index[idx]
-            video = self.data_list[video_idx]
-
-            frame = video.frames[frame_idx]
-            if isinstance(frame, np.ndarray):
-                frame = frame.astype(np.float32)
-                if len(frame.shape) == 2:  # add channel dimension if grayscale
-                    frame = frame[np.newaxis, :, :]
-
-            if self.transform:
-                if isinstance(frame, np.ndarray) and frame.shape[0] == 1:
-                    frame = frame[0]  # have to remove channel dimension for transforms
-                frame = self.transform(frame)
-
-            target = {}
-            if video.has_lesion and video.bboxes is not None and frame_idx < len(video.bboxes):
-                bbox = video.bboxes[frame_idx]
-                if bbox is not None and len(bbox) > 0:
-                    # Convert bbox to [x1, y1, x2, y2] format and torch tensor
-                    boxes = torch.tensor([bbox], dtype=torch.float32)
-
-                    # Ensure boxes are valid (non-empty and properly formed)
-                    if boxes.shape[0] > 0 and boxes.shape[1] == 4:
-                        # Make sure boxes are in correct format [x1, y1, x2, y2] with x1 < x2 and y1 < y2
-                        boxes[:, 2] = torch.max(boxes[:, 0] + 1, boxes[:, 2])
-                        boxes[:, 3] = torch.max(boxes[:, 1] + 1, boxes[:, 3])
-
-                        target['boxes'] = boxes
-                        # Important: Labels must be integers starting from 1 (0 is background)
-                        target['labels'] = torch.ones(boxes.shape[0], dtype=torch.int64)
-                    else:
-                        # Empty or invalid boxes
-                        target['boxes'] = torch.zeros((0, 4), dtype=torch.float32)
-                        target['labels'] = torch.zeros(0, dtype=torch.int64)
-                else:
-                    # No bbox for this frame
-                    target['boxes'] = torch.zeros((0, 4), dtype=torch.float32)
-                    target['labels'] = torch.zeros(0, dtype=torch.int64)
-            else:
-                # No lesion/bbox in this video
-                target['boxes'] = torch.zeros((0, 4), dtype=torch.float32)
-                target['labels'] = torch.zeros(0, dtype=torch.int64)
-
+            vid_idx, frm_idx = self.frame_index[idx]
+            item = self.data_list[vid_idx]
+            arr = item.frames[frm_idx]
             metadata = {
-                'patient_id': video.patient_id,
-                'video_id': video.video_id,
-                'frame_idx': frame_idx,
-                'total_frames': video.frame_count
+                'patient_id': item.patient_id,
+                'video_id': item.video_id,
+                'frame_idx': frm_idx,
+                'total_frames': item.frame_count
+            }
+            has_bbox = getattr(item, 'has_lesion', False)
+            raw_bbox = (item.bboxes or [None])[frm_idx] if has_bbox else None
+        else:
+            item = self.data_list[idx]
+            arr = item.get_image()
+            metadata = {
+                'patient_id': item.patient_id,
+                'video_id': item.video_id,
+                'frame_nr': item.frame_nr
+            }
+            raw_bbox = getattr(item, 'bbox', None)
+
+        # prepare bounding boxes
+        bboxes, labels = [], []
+        if isinstance(raw_bbox, list) and len(raw_bbox) == 4:
+            x1, y1, x2, y2 = raw_bbox
+            x1, x2 = min(x1, x2), max(x1, x2)
+            y1, y2 = min(y1, y2), max(y1, y2)
+            bboxes.append([x1, y1, x2, y2])
+            labels.append(1)
+
+        # process numpy arrays
+        if isinstance(arr, np.ndarray):
+            arr = arr.astype(np.float32)
+            # ensure HWC
+            if arr.ndim == 2:
+                arr = arr[:, :, None]
+            elif arr.ndim == 3 and arr.shape[0] in {1, 3}:
+                arr = arr.transpose(1, 2, 0)
+            # to uint8
+            if arr.dtype != np.uint8:
+                arr = (arr * 255 if arr.max() <= 1.0 else arr).astype(np.uint8)
+            # augment
+            if self.augment_transform and not self.transform_applied:
+                out = self.augment_transform(image=arr, bboxes=bboxes, labels=labels)
+                arr, bboxes, labels = out['image'], out['bboxes'], out['labels']
+                self.transform_applied = True
+            # base transform
+            arr = self.base_transform(image=arr)['image']
+            # repeat channels if needed
+            if self.repeat_channels and arr.ndim == 3 and arr.shape[0] == 1:
+                arr = arr.repeat(3, 1, 1)
+            # build target
+            if bboxes:
+                target = {
+                    'boxes': torch.tensor(bboxes, dtype=torch.float32),
+                    'labels': torch.tensor(labels, dtype=torch.int64)
+                }
+            else:
+                target = {
+                    'boxes': torch.zeros((0, 4), dtype=torch.float32),
+                    'labels': torch.zeros((0,), dtype=torch.int64)
+                }
+        else:
+            # non-array or no transform
+            target = {
+                'boxes': torch.zeros((0, 4), dtype=torch.float32),
+                'labels': torch.zeros((0,), dtype=torch.int64)
             }
 
-            if self.repeat_channels and frame.shape[0] == 1:
-                frame = frame.repeat(3, 1, 1)
-
-            return frame, target, metadata
-
-        else: # using XCAImages
-            image_obj = self.data_list[idx]
-            image = image_obj.get_image()
-
-            if self.transform:
-                image = self.transform(image)
-
-            target = {}
-            if image_obj.bbox:
-                target['boxes'] = torch.tensor([image_obj.bbox], dtype=torch.float32)
-                target['labels'] = torch.tensor([1], dtype=torch.int64)  # stenosis
-            else:
-                target['boxes'] = torch.zeros((0, 4), dtype=torch.float32)
-                target['labels'] = torch.zeros(0, dtype=torch.int64) # no stenosis
-
-            metadata = {
-                'patient_id': image_obj.patient_id,
-                'video_id': image_obj.video_id,
-                'frame_nr': image_obj.frame_nr
-            }
-
-            if self.repeat_channels and image.shape[0] == 1:
-                image = image.repeat(3, 1, 1)
-
-            return image, target, metadata
+        return arr, target, metadata
 
 
 
