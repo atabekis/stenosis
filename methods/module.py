@@ -145,7 +145,8 @@ class XCADataModule(pl.LightningDataModule):
             num_workers=self.num_workers,
             collate_fn=self._collate_fn,
             pin_memory=True,
-            persistent_workers=True if self.num_workers > 0 else False
+            persistent_workers=True if self.num_workers > 0 else False,
+            generator=torch.Generator().manual_seed(self.seed)
         )
 
 
@@ -157,7 +158,9 @@ class XCADataModule(pl.LightningDataModule):
             num_workers=self.num_workers,
             collate_fn=self._collate_fn,
             pin_memory=True,
-            persistent_workers=True if self.num_workers > 0 else False
+            persistent_workers=True if self.num_workers > 0 else False,
+            generator=torch.Generator().manual_seed(self.seed)
+
         )
 
     def test_dataloader(self):
@@ -168,7 +171,8 @@ class XCADataModule(pl.LightningDataModule):
             num_workers=self.num_workers,
             collate_fn=self._collate_fn,
             pin_memory=True,
-            persistent_workers= True if self.num_workers > 0 else False
+            persistent_workers= True if self.num_workers > 0 else False,
+            generator=torch.Generator().manual_seed(self.seed)
         )
 
     @staticmethod

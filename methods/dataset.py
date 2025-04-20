@@ -66,7 +66,7 @@ class XCADataset(Dataset):
             self.augment_transform = A.Compose([
                 A.RandomBrightnessContrast(p=0.5),
                 A.HorizontalFlip(p=0.5),
-                A.VerticalFlip(p=0.2),
+                A.Rotate(p=0.3, limit=5),
                 A.GaussNoise(p=0.5)
             ], bbox_params=A.BboxParams(
                 format='pascal_voc',  # [x_min, y_min, x_max, y_max]
