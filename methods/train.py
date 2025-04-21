@@ -8,7 +8,7 @@ import torch
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
-from pytorch_lightning.strategies import DDPStrategy
+from pytorch_lightning.strategies import DDPStrategy, SingleDeviceStrategy
 
 from methods.data_module import XCADataModule
 from methods.reader import XCAImage, XCAVideo
@@ -125,16 +125,17 @@ def train_model(
         trainer_kwargs['devices'] = 'auto'
 
 
+    final_strategy = None
     if strategy:
         if strategy.lower() == 'ddp':
-            trainer_kwargs['strategy'] = DDPStrategy(find_unused_parameters=True)
+             final_strategy = DDPStrategy(find_unused_parameters=True)
         else:
-            trainer_kwargs['strategy'] = strategy
+            final_strategy = strategy
     elif isinstance(trainer_kwargs.get('devices'), list) and len(trainer_kwargs['devices']) > 1:
         print("Auto-configuring DDP strategy for multi-GPU.")
-        trainer_kwargs['strategy'] = DDPStrategy(find_unused_parameters=True)
-    elif 'strategy' not in trainer_kwargs:
-        trainer_kwargs['strategy'] = None
+        final_strategy = DDPStrategy(find_unused_parameters=True)
+    if final_strategy is not None:
+        trainer_kwargs['strategy'] = final_strategy
 
 
     trainer = pl.Trainer(**trainer_kwargs)
