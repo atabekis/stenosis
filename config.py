@@ -1,10 +1,8 @@
 # config.py
-import torch
-import random
 import numpy as np
 from pathlib import Path
-import pytorch_lightning as pl
 
+from util import get_optimal_workers
 
 # ------------ RANDOM SEED -------------- #
 SEED = 5
@@ -32,6 +30,16 @@ assert np.isclose(TRAIN_SIZE + VAL_SIZE + TEST_SIZE, 1), 'Train, Validation and 
 CLASSES = ['__background__', 'stenosis']
 NUM_CLASSES = len(CLASSES)
 
-DEBUG = False
+DEBUG = True
 DEBUG_SIZE = 0.1  # keep % (DEBUG_SIZE * 100) of data
 
+NUM_WORKERS = get_optimal_workers() if not DEBUG else 4
+
+
+# -------------- MODEL-SPECIFIC CONTROLS ---------- #
+FOCAL_LOSS_ALPHA = 0.25
+FOCAL_LOSS_GAMMA = 2.0
+GIOU_LOSS_COEF = 2.0
+L1_LOSS_COEF = 5.0
+CLS_LOSS_COEF = 2.0
+POSITIVE_CLASS_ID = 1

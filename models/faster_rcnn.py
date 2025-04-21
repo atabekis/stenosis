@@ -6,15 +6,12 @@ from typing import Dict, List, Optional
 # Torch imports
 import torch
 import torch.nn as nn
-from torch.optim import Adam
 from torchvision.models.detection.rpn import AnchorGenerator
 from torchvision.models.detection import fasterrcnn_resnet50_fpn
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor, FasterRCNN_ResNet50_FPN_Weights
-import pytorch_lightning as pl
 
 from util import log
 from config import NUM_CLASSES
-from methods.metrics import Metrics
 
 
 class FasterRCNN(nn.Module):
@@ -101,127 +98,3 @@ class FasterRCNN(nn.Module):
             return self.model(images, targets)  # Returns loss dictionary
         else:
             return self.model(images)  # Returns predictions only
-
-
-class FasterRCNNLightningModule(pl.LightningModule):
-    """
-    PyTorch Lightning module for Faster R-CNN
-    """
-
-    def __init__(
-            self,
-            model: FasterRCNN,
-            learning_rate: float = 0.001,
-            weight_decay: float = 0.0005,
-            num_classes: int = NUM_CLASSES,
-    ):
-        """
-        Initialize the Lightning module
-        :param model: Faster R-CNN model instance
-        :param learning_rate: learning rate for optimizer
-        :param weight_decay: weight decay for optimizer
-        """
-        super().__init__()
-        self.model = model
-        self.learning_rate = learning_rate
-        self.weight_decay = weight_decay
-
-        # initialize custom metrics class from methods.metrics
-        self.train_metrics = Metrics(box_format='xyxy', num_classes=num_classes)
-        self.val_metrics = Metrics(box_format='xyxy', num_classes=num_classes)
-        self.test_metrics = Metrics(box_format='xyxy', num_classes=num_classes)
-
-        # save hyperparameters for checkpointing callbacks
-        self.save_hyperparameters(ignore=['model'])
-
-        self.val_loss = None
-
-
-    def forward(self, images: List[torch.Tensor], targets: Optional[List[Dict[str, torch.Tensor]]] = None):
-        return self.model(images, targets)
-
-
-    def configure_optimizers(self):
-        """Configure Adam optimizer with weight decay"""
-
-        optimizer = Adam(
-            self.model.parameters(),
-            lr=self.learning_rate,
-            weight_decay=self.weight_decay,
-        )
-        # one-cycle scheduler works better with obj detection
-        scheduler = torch.optim.lr_scheduler.OneCycleLR(
-            optimizer,
-            max_lr=self.learning_rate * 10,
-            total_steps=self.trainer.estimated_stepping_batches,
-            pct_start=0.1,
-            div_factor=10.0,
-            final_div_factor=1000.0,
-            three_phase=True,
-        )
-        return {
-            'optimizer': optimizer,
-            'lr_scheduler': {
-                'scheduler': scheduler,
-                'interval': 'step',
-            }
-        }
-
-        # return Adam(
-        #     self.parameters(),
-        #     lr=self.learning_rate,
-        #     weight_decay=self.weight_decay
-        # )
-
-    def training_step(self, batch, batch_idx):
-        images, targets, _ = batch
-        targets = [{k: v.to(self.device) for k, v in t.items()} for t in targets]
-
-        loss_dict = self(images, targets)
-        losses = sum(loss for loss in loss_dict.values())
-
-        self.log_dict({f"train/{k}": v for k, v in loss_dict.items()}, on_step=True, on_epoch=True,
-                      batch_size=len(images), sync_dist=True)
-        self.log("train/loss", losses, on_step=True, on_epoch=True, prog_bar=True, batch_size=len(images), sync_dist=True)
-
-        return losses
-
-    def validation_step(self, batch, batch_idx):
-        images, targets, _ = batch
-        targets = [{k: v.to(self.device) for k, v in t.items()} for t in targets]
-
-        self.model.eval()
-        with torch.no_grad():
-            predictions = self(images)
-
-        self.val_metrics.update(predictions, targets)
-
-        self.val_metrics.update(predictions, targets)
-
-        self.model.train()
-        with torch.no_grad():
-            loss_dict = self(images, targets)
-        self.model.eval()
-
-        losses = sum(loss for loss in loss_dict.values())
-        self.log("val/loss", losses, on_epoch=True, prog_bar=True, batch_size=len(images), sync_dist=True)
-
-        self.log("val_loss", losses, on_epoch=True, prog_bar=False, batch_size=len(images), sync_dist=True)
-
-    def on_validation_epoch_end(self):
-        val_results = self.val_metrics.compute()
-        self.log_dict({f"val/{k}": v for k, v in val_results.items()}, prog_bar=True, sync_dist=True)
-        self.val_metrics.reset()
-
-    def test_step(self, batch, batch_idx):
-        images, targets, _ = batch
-        targets = [{k: v.to(self.device) for k, v in t.items()} for t in targets]
-
-        predictions = self(images)
-        self.test_metrics.update(predictions, targets)
-
-    def on_test_epoch_end(self):
-        test_results = self.test_metrics.compute()
-        self.log_dict({f"test/{k}": v for k, v in test_results.items()})
-        self.test_metrics.reset()
-

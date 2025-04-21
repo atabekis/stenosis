@@ -1,4 +1,4 @@
-# module.py
+# data_module.py
 
 # Python imports
 import random
@@ -14,7 +14,7 @@ from torch.utils.data import DataLoader
 from util import log
 from methods.dataset import XCADataset
 from methods.reader import XCAImage, XCAVideo
-from config import TRAIN_SIZE, VAL_SIZE, TEST_SIZE, SEED
+from config import TRAIN_SIZE, VAL_SIZE, TEST_SIZE, SEED, NUM_WORKERS
 
 
 
@@ -24,7 +24,7 @@ class XCADataModule(pl.LightningDataModule):
             self,
             data_list : list[Union['XCAImage', 'XCAVideo']],
             batch_size: int = 8,
-            num_workers: int = 4,
+            num_workers: int = NUM_WORKERS,
             train_val_test_split: tuple[float, float, float] = (TRAIN_SIZE, VAL_SIZE, TEST_SIZE),
             use_augmentation: bool = False,
             repeat_channels: bool = True,

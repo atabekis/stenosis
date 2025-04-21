@@ -9,15 +9,18 @@ from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from pytorch_lightning.strategies import DDPStrategy
 
-from methods.module import XCADataModule
+from methods.data_module import XCADataModule
 from methods.reader import XCAImage, XCAVideo
 
 from config import (
     MODEL_CHECKPOINTS_DIR, LOGS_DIR,
     TRAIN_SIZE, VAL_SIZE, TEST_SIZE,
+    NUM_WORKERS, POSITIVE_CLASS_ID
+
 )
 
-from lightning_fabric.plugins.environments import LightningEnvironment
+
+
 
 def train_model(
         data_list: list[Union['XCAImage', 'XCAVideo']],
@@ -26,7 +29,7 @@ def train_model(
         batch_size: int = 8,
         max_epochs: int = 50,
         use_augmentation: bool = True,
-        num_workers: int = 4,
+        num_workers: int = NUM_WORKERS,
         repeat_channels: bool = True,
         normalize_params: dict[str, Union[float, int]] = None,
         train_val_test_split: tuple[float, float, float] = (TRAIN_SIZE, VAL_SIZE, TEST_SIZE),
@@ -43,6 +46,7 @@ def train_model(
     :param max_epochs: maximum number of training epochs
     :param use_augmentation: whether to use augmentation
     :param num_workers: number of cores/workers for data loaders
+    :param repeat_channels: whether to repeat channels of grayscale image to 3-channel RGB
     :param train_val_test_split: ratio of train/val/test split
     :param gpus: number of GPUs to use or list of GPU indices
     :param strategy: distributed training strategy {'ddp', 'ddp_spawn', etc.} passed onto Trainer
@@ -70,7 +74,7 @@ def train_model(
         filename= model.__class__.__name__ + '-{epoch:02d}-{val_loss:.4f}',
         save_top_k=3,
         verbose=True,
-        monitor='val_loss',
+        monitor='val/loss',
         mode='min',
         save_on_train_epoch_end=False,
         every_n_epochs=1,
@@ -78,7 +82,7 @@ def train_model(
     )
 
     early_stop_callback = EarlyStopping(
-        monitor='val_loss',
+        monitor='val/loss',
         patience=10,
         verbose=True,
         mode='min',

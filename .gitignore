@@ -2,6 +2,8 @@
 .cache
 .backburner.txt
 
+deprecated
+
 data/CADICA/nonselectedVideos
 data/CADICA/selectedVideos
 
