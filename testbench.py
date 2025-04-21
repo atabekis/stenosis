@@ -3,33 +3,85 @@ import os
 import torch
 import random
 import argparse
+import warnings
 import numpy as np
+
 import pytorch_lightning as pl
 
 from methods.reader import Reader
 from methods.train import train_model
+from methods.detector_module import DetectionLightningModule
 
 from config import (
     SEED,
     NUM_CLASSES,
-    CADICA_DATASET_DIR, DEBUG,
+    CADICA_DATASET_DIR, DEBUG, NUM_WORKERS, POSITIVE_CLASS_ID,
+)
+from models.faster_rcnn import FasterRCNN
+
+from util import log, get_optimal_workers
+# from models.faster_rcnn import FasterRCNN, FasterRCNNLightningModule
+from models.retinanet_stage1 import Stage1RetinaNet
+
+
+
+warnings.filterwarnings(
+    "ignore",
+    message=r".*Checkpoint directory .* exists and is not empty.*",
+    category=UserWarning,
+)
+warnings.filterwarnings(
+    "ignore",
+    message=r".*`training_step` returned `None`.*",
+    category=UserWarning,
 )
 
-from models.faster_rcnn import FasterRCNN, FasterRCNNLightningModule
-from util import log
+
+config_single_gpu = {
+    'batch_size': 32,
+    'num_workers': NUM_WORKERS,
+    'strategy': None,
+    'learning_rate': 1e-4,
+    'weight_decay': 1e-4,
+    'warmup_steps': 100,
+    'normalize_params': {'mean': 0.485, 'std': 0.229},
+    'precision': '16-mixed',
+    'repeat_channels': True
+}
+
+config_multi_gpu = {
+    'batch_size': 32,  # per gpu
+    'num_workers': NUM_WORKERS,
+    'strategy': 'ddp',
+    'learning_rate': 1e-4,
+    'weight_decay': 1e-4,
+    'warmup_steps': 100,
+    'normalize_params': {'mean': 0.485, 'std': 0.229}, # Use floats
+    'precision': '16-mixed',
+    'repeat_channels': True
+}
+
+
+
 
 if __name__ == '__main__':
-
-
     parser = argparse.ArgumentParser(description='Train XCA detection model')
-    parser.add_argument('--gpus', type=str, default='auto', help='GPU IDs to use (comma-separated, e.g. "0,1,2")')
-    parser.add_argument('--batch_size', type=int, default=8, help='Batch size per GPU')
+    # --- Arguments that override base configs or control training process ---
+    parser.add_argument('--gpus', type=str, default='auto', help='GPU IDs (comma-separated, e.g., "0,1"), "auto" for all available, or 0 for CPU')
+    parser.add_argument('--batch_size', type=int, default=None, help='Batch size per GPU (overrides base config)')
+    parser.add_argument('--max_epochs', type=int, default=24, help='Maximum training epochs')
+    parser.add_argument('--num_workers', type=int, default=None, help='Number of dataloader workers (overrides base config)')
     parser.add_argument('--strategy', type=str, default=None,
                         choices=['ddp', 'ddp_spawn', 'deepspeed', 'fsdp', None],
-                        help='Distributed training strategy')
-    parser.add_argument('--max_epochs', type=int, default=100, help='Maximum training epochs')
-    parser.add_argument('--use_augmentation', action='store_true', default=True if not DEBUG else False, help='Use data augmentation')
-    parser.add_argument('--num_workers', type=int, default=8, help='Number of dataloader workers')
+                        help='Distributed training strategy (overrides base config default)')
+    parser.add_argument('--precision', type=str, default=None, choices=['16-mixed', 'bf16-mixed', '32-true', '64-true'], help='Training precision (overrides base config)')
+    # --- Arguments that are generally fixed for the experiment ---
+    parser.add_argument('--use_augmentation', action=argparse.BooleanOptionalAction, default=True, help='Enable/disable data augmentation, default True')
+    parser.add_argument('--effective_batch_size', type=int, default=32, help='Target effective batch size for gradient accumulation')
+    # --- Model/Data specific ---
+    parser.add_argument('--detections_per_img', type=int, default=100, help='Max detections post-NMS')
+    parser.add_argument('--pretrained', action=argparse.BooleanOptionalAction, default=True, help='Use pretrained backbone weights')
+
     args = parser.parse_args()
 
 
@@ -40,80 +92,110 @@ if __name__ == '__main__':
     pl.seed_everything(SEED); random.seed(SEED); np.random.seed(SEED); torch.manual_seed(SEED)
     torch.set_float32_matmul_precision('high')
 
-    if args.gpus == 'auto':
-        gpu_ids = None
-    elif args.gpus and args.gpus.strip():
-        gpu_ids = [int(x) for x in args.gpus.split(',')]
+    if torch.cuda.is_available():
+        num_available_gpus = torch.cuda.device_count()
+        if args.gpus == 'auto':
+            num_target_gpus = num_available_gpus
+            trainer_devices = 'auto'  # let PL handle it
+        elif args.gpus and args.gpus != '0':
+            try:
+                gpu_ids = [int(x.strip()) for x in args.gpus.split(',')]
+                if not all(0 <= g < num_available_gpus for g in gpu_ids):
+                    raise ValueError(
+                        f"Invalid GPU ID requested in {gpu_ids}. Available GPUs: {list(range(num_available_gpus))}")
+                num_target_gpus = len(gpu_ids)
+                trainer_devices = gpu_ids
+            except ValueError as e:
+                log(f"Error parsing GPU IDs: {e}. Exiting.")
+                exit(1)
+        else:  # if CPU
+            num_target_gpus = 0
+            trainer_devices = 0
     else:
-        gpu_ids = None
+        log("CUDA not available, running on CPU.")
+        num_target_gpus = 0
+        trainer_devices = 1
 
-
-    strategy = args.strategy
-    if strategy is None and gpu_ids and len(gpu_ids) > 1:
-        strategy = 'ddp'
-
-    effective_batch_size = 32
-    if gpu_ids is None:
-        import torch
-        num_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 1
+    if num_target_gpus == 0:
+        log("Targeting CPU for training.")
     else:
-        num_gpus = len(gpu_ids) if gpu_ids else 1
-    accumulate_grad_batches = max(1, effective_batch_size // (args.batch_size * num_gpus))
+        log(f"Targeting {num_target_gpus} GPU(s) for training. Device IDs for Trainer: {trainer_devices}")
 
+    if num_target_gpus <= 1:
+        log("Using single-device base configuration.")
+        base_config = config_single_gpu.copy()
+        # ensure strategy is None for single device unless explicitly overridden later
+        if args.strategy is None:
+            base_config['strategy'] = None
+    else:
+        log("Using multi-GPU base configuration.")
+        base_config = config_multi_gpu.copy()
+        if args.strategy is None:
+            base_config['strategy'] = 'ddp'
 
-    config = {
-        'batch_size': args.batch_size,
-        'max_epochs': args.max_epochs,
-        'use_augmentation': args.use_augmentation,
-        'num_workers': args.num_workers,
-        'repeat_channels': True,
-        'gpus': gpu_ids,
-        'strategy': strategy,
-        'accumulate_grad_batches': accumulate_grad_batches,
-        'normalize_params': {'mean': 0.485, 'std': 0.229},
-    }
+    run_config = base_config
 
-    log(f"Training configuration:")
-    log(f"  GPUs: {((torch.cuda.get_device_name(device) for device in gpu_ids) if gpu_ids else torch.cuda.get_device_name())}")
-    log(f"  Strategy: {strategy}")
-    log(f"  Using augmentation: {args.use_augmentation}")
-    log(f"  Batch size per GPU: {args.batch_size}")
-    log(f"  Effective batch size: {args.batch_size * num_gpus * accumulate_grad_batches}")
-    log(f"  Gradient accumulation steps: {accumulate_grad_batches}")
+    if args.batch_size is not None: run_config['batch_size'] = args.batch_size
+    if args.num_workers is not None: run_config['num_workers'] = args.num_workers
+    if args.strategy is not None: run_config['strategy'] = args.strategy
+    if args.precision is not None: run_config['precision'] = args.precision
+
+    run_config['max_epochs'] = args.max_epochs
+    run_config['use_augmentation'] = args.use_augmentation
+
+    per_device_batch_size = run_config['batch_size']
+    global_batch_size = per_device_batch_size * max(1, num_target_gpus)
+    accumulate_grad_batches = max(1, args.effective_batch_size // global_batch_size)
+    effective_batch_size_achieved = global_batch_size * accumulate_grad_batches
+
+    run_config['accumulate_grad_batches'] = accumulate_grad_batches
+    run_config['gpus'] = trainer_devices
+
+    log("--- Final Run Configuration ---")
+    for key, value in run_config.items():
+        log(f"   {key}: {value}")
+    log(f"   Calculated effective batch size: {effective_batch_size_achieved}")
+    if effective_batch_size_achieved != args.effective_batch_size:
+        log(f"   Warning: Could not achieve exact effective batch size {args.effective_batch_size}. Using {effective_batch_size_achieved}.")
 
 
     reader = Reader(dataset_dir=CADICA_DATASET_DIR)
     xca_images = reader.xca_images
     xca_videos = reader.construct_videos()
 
-    config_single_gpu = {
-        'batch_size': 8,
-        # 'learning_rate': 1e-3,
-        'max_epochs': 100,
-        'use_augmentation': True,
-        'num_workers': 8,
-        'repeat_channels': True,
-        'gpus': 1,
-        'normalize_params': {'mean': [0.485],  'std': [0.229]},
-    }
+    # model = Stage1RetinaNet(
+    #     pretrained=args.pretrained,
+    #     detections_per_img=args.detections_per_img
+    # )
+    model = FasterRCNN()
 
-    configuration = config_single_gpu
-
-    model = FasterRCNN(
-        num_classes=NUM_CLASSES,
-        pretrained=True,
-        trainable_backbone_layers=3
-    )
-
-    # Create the Lightning module
-    lightning_module = FasterRCNNLightningModule(
+    lightning_module = DetectionLightningModule(
         model=model,
-        learning_rate=1e-4,
-        weight_decay=0.0001
+        model_stage=1,
+        learning_rate=run_config['learning_rate'],
+        weight_decay=run_config['weight_decay'],
+        warmup_steps=run_config['warmup_steps'],
+        max_epochs=run_config['max_epochs'],
+        batch_size=per_device_batch_size * max(1, num_target_gpus),
+        accumulate_grad_batches=run_config['accumulate_grad_batches'],
+        focal_alpha=Stage1RetinaNet.FOCAL_LOSS_ALPHA,
+        focal_gamma=Stage1RetinaNet.FOCAL_LOSS_GAMMA,
+        positive_class_id=POSITIVE_CLASS_ID,
     )
 
     trained_model = train_model(
-        data_list=xca_images,
-        model = model,
+        model=model,
         lightning_module=lightning_module,
-        **config_single_gpu)
+        data_list=xca_images,
+
+        max_epochs=run_config['max_epochs'],
+        batch_size=run_config['batch_size'],
+        num_workers=run_config['num_workers'],
+        normalize_params=run_config['normalize_params'],
+        accumulate_grad_batches=run_config['accumulate_grad_batches'],
+        strategy=run_config['strategy'],
+        gpus=run_config['gpus'],
+
+        use_augmentation=run_config['use_augmentation'],
+        repeat_channels=run_config['repeat_channels'],
+    )
