@@ -151,7 +151,7 @@ if __name__ == '__main__':
     run_config['accumulate_grad_batches'] = accumulate_grad_batches
     run_config['gpus'] = trainer_devices
 
-    log("--- Final Run Configuration ---")
+    log("--- Run Configuration ---")
     for key, value in run_config.items():
         log(f"   {key}: {value}")
     log(f"   Calculated effective batch size: {effective_batch_size_achieved}")

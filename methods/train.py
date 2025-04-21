@@ -4,6 +4,7 @@ from pathlib import WindowsPath
 from typing import List, Optional, Union
 
 # Torch imports
+import torch
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
@@ -34,6 +35,7 @@ def train_model(
         normalize_params: dict[str, Union[float, int]] = None,
         train_val_test_split: tuple[float, float, float] = (TRAIN_SIZE, VAL_SIZE, TEST_SIZE),
         gpus: Optional[Union[int, List[int]]] = None,
+        precision: Optional[str] = None,
         accumulate_grad_batches: int = 1,
         strategy: Optional[str] = None,
         save_dir: WindowsPath | str = MODEL_CHECKPOINTS_DIR,
@@ -41,14 +43,18 @@ def train_model(
 ):
     """
     Train given model, supports single and multi-gpu
+    :param model: model to be trained
+    :param lightning_module the main training module using pl.LightningModule
     :param data_list: list of XCAImage or XCAVideo objects
     :param batch_size: batch size for training (per gpu)
     :param max_epochs: maximum number of training epochs
     :param use_augmentation: whether to use augmentation
     :param num_workers: number of cores/workers for data loaders
     :param repeat_channels: whether to repeat channels of grayscale image to 3-channel RGB
+    :param normalize_params: normalization parameters, expected in the format {mean: x, std: y}
     :param train_val_test_split: ratio of train/val/test split
     :param gpus: number of GPUs to use or list of GPU indices
+    :param precision: precision mode
     :param strategy: distributed training strategy {'ddp', 'ddp_spawn', etc.} passed onto Trainer
     :param save_dir: directory to save checkpoints
     :param log_dir: directory to save tensorboard logs
@@ -100,18 +106,35 @@ def train_model(
         'log_every_n_steps': 10,
         'deterministic': False,
         'accumulate_grad_batches': accumulate_grad_batches,
+        'precision': precision,
     }
 
-    if gpus is None:
-        trainer_kwargs['accelerator'], trainer_kwargs['devices'] = 'auto', 'auto'
-    else:
-        trainer_kwargs['accelerator'], trainer_kwargs['devices'] = 'gpu', gpus
+    if gpus == 0: # CPU
+        trainer_kwargs['accelerator'] = 'cpu'
+        trainer_kwargs['devices'] = '1'
+    elif isinstance(gpus, (int, list)) and gpus != 0:
+        if not torch.cuda.is_available():
+            print("Warning: GPUs requested but CUDA not available. Falling back to CPU.")
+            trainer_kwargs['accelerator'] = 'cpu'
+            trainer_kwargs['devices'] = 1
+        else:
+            trainer_kwargs['accelerator'] = 'gpu'
+            trainer_kwargs['devices'] = gpus # Pass the int or list
+    else: # Includes gpus='auto' or gpus=None (should not happen if testbench sends 'auto' or 0/1/[...])
+        trainer_kwargs['accelerator'] = 'auto'
+        trainer_kwargs['devices'] = 'auto'
 
 
     if strategy:
-        trainer_kwargs['strategy'] = strategy
-    elif isinstance(gpus, (list, int)) and (isinstance(gpus, list) and len(gpus) > 1 or isinstance(gpus, int) and gpus > 1):
+        if strategy.lower() == 'ddp':
+            trainer_kwargs['strategy'] = DDPStrategy(find_unused_parameters=True)
+        else:
+            trainer_kwargs['strategy'] = strategy
+    elif isinstance(trainer_kwargs.get('devices'), list) and len(trainer_kwargs['devices']) > 1:
+        print("Auto-configuring DDP strategy for multi-GPU.")
         trainer_kwargs['strategy'] = DDPStrategy(find_unused_parameters=True)
+    elif 'strategy' not in trainer_kwargs:
+        trainer_kwargs['strategy'] = None
 
 
     trainer = pl.Trainer(**trainer_kwargs)
