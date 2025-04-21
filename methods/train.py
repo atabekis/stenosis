@@ -96,9 +96,6 @@ def train_model(
 
     logger = TensorBoardLogger(log_dir, name=model.__class__.__name__)
 
-    if strategy == 'ddp':
-        strategy = DDPStrategy(find_unused_parameters=True)
-
     trainer_kwargs = {
         'max_epochs': max_epochs,
         'callbacks': [checkpoint_callback, early_stop_callback, ],
