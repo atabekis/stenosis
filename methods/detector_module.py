@@ -212,7 +212,7 @@ class DetectionLightningModule(pl.LightningModule):
                               'batch_size': len(images)}
             for k, v in loss_dict.items():
                 self.log(f'val/{k}', v, **log_kwargs_val)
-            self.log(f'val/loss', val_losses, **log_kwargs_val)
+            # self.log(f'val/loss', val_losses, **log_kwargs_val)
 
             self.log('val_loss', val_losses, **log_kwargs_val)  # needed for ES and checkpoint
 
