@@ -77,10 +77,10 @@ def train_model(
 
     checkpoint_callback = ModelCheckpoint(
         dirpath= save_dir,
-        filename= model.__class__.__name__ + '-{epoch:02d}-{val_loss:.4f}',
+        filename= model.__class__.__name__ + '-v{version}-epoch{epoch:02d}-val_loss{val_loss:.4f}',
         save_top_k=3,
         verbose=True,
-        monitor='val/loss',
+        monitor='val_loss',
         mode='min',
         save_on_train_epoch_end=False,
         every_n_epochs=1,
@@ -88,7 +88,7 @@ def train_model(
     )
 
     early_stop_callback = EarlyStopping(
-        monitor='val/loss',
+        monitor='val_loss',
         patience=10,
         verbose=True,
         mode='min',

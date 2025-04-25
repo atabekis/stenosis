@@ -214,6 +214,8 @@ class DetectionLightningModule(pl.LightningModule):
                 self.log(f'val/{k}', v, **log_kwargs_val)
             self.log(f'val/loss', val_losses, **log_kwargs_val)
 
+            self.log('val_loss', val_losses, **log_kwargs_val)  # needed for ES and checkpoint
+
 
     def training_step(self, batch, batch_idx):
         return self._step_logic(batch, batch_idx, 'train')
