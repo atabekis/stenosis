@@ -41,20 +41,20 @@ class Stage1RetinaNet(nn.Module):
     ANCHOR_ASPECT_RATIOS = ((0.5, 1.0, 2.0),) * len(ANCHOR_SIZES)
 
     # inference params
-    SCORE_THRESH = 0.05
-    NMS_THRESH = 0.5
+    SCORE_THRESH = 0.3
+    NMS_THRESH = 0.4
 
     FOCAL_LOSS_ALPHA = FOCAL_LOSS_ALPHA
     FOCAL_LOSS_GAMMA = FOCAL_LOSS_GAMMA
 
+    DETECTIONS_PER_IMAGE_AFTER_NMS = 20
+
     def __init__(
             self,
             pretrained: bool = True,
-            detections_per_img: int = 100
     ):
         """
          Initialize RetinaNet model
-        :param detections_per_img: max num. of detections per image post NMS
         """
         super().__init__()
 
@@ -68,7 +68,7 @@ class Stage1RetinaNet(nn.Module):
         log(f"  Focal Loss alpha: {self.FOCAL_LOSS_ALPHA}")
         log(f"  Focal Loss gamma: {self.FOCAL_LOSS_GAMMA}")
         log(f"  Pretrained backbone: {pretrained}")
-        log(f"  Detections per image: {detections_per_img}")
+        log(f"  Detections per image: {self.DETECTIONS_PER_IMAGE_AFTER_NMS}")
 
         # 1. backbone & fpn
         self.backbone = EfficientNetFPNBackbone(
@@ -89,7 +89,7 @@ class Stage1RetinaNet(nn.Module):
             anchor_generator=self.anchor_generator,
             score_threshold=self.SCORE_THRESH,
             nms_threshold=self.NMS_THRESH,
-            detections_per_img=detections_per_img,
+            detections_per_img=self.DETECTIONS_PER_IMAGE_AFTER_NMS,
         )
 
 

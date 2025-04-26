@@ -10,6 +10,10 @@ from torchvision.ops import box_iou
 from torchmetrics.detection import MeanAveragePrecision
 from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
 
+# Image logging in TensorBoard
+from torchvision.utils import draw_bounding_boxes
+from pytorch_lightning.loggers import TensorBoardLogger
+
 # Python imports
 import os
 import math
@@ -24,9 +28,13 @@ from config import (
     L1_LOSS_COEF,
     CLS_LOSS_COEF,
     POSITIVE_CLASS_ID,
+    CLASSES
 )
 
-
+# tensorboard logging
+PRED_COLOR = "blue"
+GT_COLOR = "green"
+LOG_SCORE_THRESHOLD = 0.0 # Only log predictions above this score
 
 
 class DetectionLightningModule(pl.LightningModule):
@@ -53,9 +61,12 @@ class DetectionLightningModule(pl.LightningModule):
             smooth_l1_beta: float = 1.0 / 9.0,  # common default for smooth L1
             giou_loss_coef: float = GIOU_LOSS_COEF,
             cls_loss_coef: float = CLS_LOSS_COEF,
-
             # as extension for another future project :)
             positive_class_id: int = POSITIVE_CLASS_ID,
+
+            # image logging/vis
+            normalize_params: Optional[dict] = None,
+            num_log_images: int = 1,  # how many images will be shown in the board (per epoch)
     ):
         super().__init__()
         self.model = model
@@ -98,6 +109,20 @@ class DetectionLightningModule(pl.LightningModule):
         self._train_input_validated = False
         self._val_input_validated = False
         self._test_input_validated = False
+
+
+        # ----- tensorboard/logging ------
+        self.normalize_params = normalize_params
+        self.num_log_images = num_log_images
+
+        self.val_image_samples = []
+        self.val_pred_samples = []
+        self.val_target_samples = []
+
+        if self.num_log_images > 0 and self.normalize_params is None:
+             log("Warning: normalize_params not provided to DetectionLightningModule. Cannot de-normalize images for logging.")
+             self.num_log_images = 0
+
 
 
     def forward(
@@ -164,23 +189,7 @@ class DetectionLightningModule(pl.LightningModule):
 
         # --- step logic (forward pass, loss/pred, logging)
         if step_type == 'train':
-            if targets is None: raise ValueError("Targets must be provided during training")
-
-            loss_dict = self.model(images, targets)
-            if not loss_dict:
-                log(f"Epoch {self.current_epoch}, Step {self.global_step}: Loss dictionary is empty.")
-                losses = torch.tensor(0.0, device=self.device, requires_grad=True)
-            else:
-                losses = sum(loss for loss in loss_dict.values())
-
-            # -------- logging & progress bar
-            log_kwargs = {'on_step': True, 'on_epoch': True, 'prog_bar': (step_type == 'train'), 'logger': True, 'sync_dist': True, 'batch_size': len(images)}
-            for k,v in loss_dict.items():
-                self.log(f'{step_type}/{k}', v, **log_kwargs)
-            self.log(f'{step_type}/loss', losses, **log_kwargs)
-            # log lr only during training
-            lr = self.lr_schedulers().get_last_lr()[0]
-            self.log('train/lr', lr, on_step=True, on_epoch=False, prog_bar=False, logger=True)
+            pass # moved to train_step()
 
         else:  # val/test
             self.model.eval()
@@ -194,6 +203,18 @@ class DetectionLightningModule(pl.LightningModule):
             pred_list = self.val_preds if step_type == 'val' else self.test_preds
             target_list = self.val_targets if step_type == 'val' else self.test_targets
             pred_list.extend(preds); target_list.extend(targets)
+
+
+            # ------ TensorBoard logging -------- #
+            if step_type == 'val' and not self.trainer.sanity_checking:
+                if len(self.val_image_samples) < self.num_log_images:
+                    num_to_add = min(self.num_log_images - len(self.val_image_samples), len(images))
+                    # detach the images
+                    self.val_image_samples.extend([img.cpu()] for img in images[:num_to_add])
+                    # detach the preds - all points of bbox
+                    self.val_pred_samples.extend([{k: v.cpu() for k, v in p.items()} for p in preds[:num_to_add]])
+                    self.val_target_samples.extend([{k: v.cpu() for k, v in t.items()} for t in targets[:num_to_add]])
+
 
         if step_type == 'val':
             original_mode = self.model.training
@@ -212,20 +233,41 @@ class DetectionLightningModule(pl.LightningModule):
                               'batch_size': len(images)}
             for k, v in loss_dict.items():
                 self.log(f'val/{k}', v, **log_kwargs_val)
-            # self.log(f'val/loss', val_losses, **log_kwargs_val)
+            self.log(f'val_loss', val_losses, **log_kwargs_val)
 
-            self.log('val_loss', val_losses, **log_kwargs_val)  # needed for ES and checkpoint
 
 
     def training_step(self, batch, batch_idx):
-        return self._step_logic(batch, batch_idx, 'train')
+        """The training step needs to explicitly return the losses for logging"""
+        images, targets, _ = batch # Unpack batch
+        if targets is None: raise ValueError("Targets must be provided during training")
+
+        loss_dict = self.model(images, targets)
+        if not loss_dict:
+            log(f"Epoch {self.current_epoch}, Step {self.global_step}: Loss dictionary is empty.")
+            losses = torch.tensor(0.0, device=self.device, requires_grad=True) # ensure loss is on correct device and requires grad
+        else:
+            losses = sum(loss for loss in loss_dict.values())
+
+        # -------- logging & progress bar
+        log_kwargs = {'on_step': True, 'on_epoch': True, 'prog_bar': True, 'logger': True, 'sync_dist': True, 'batch_size': len(images)}
+        if loss_dict: # Only log if dict is not empty
+            for k,v in loss_dict.items():
+                self.log(f'train/{k}', v, **log_kwargs)
+        self.log(f'train/loss', losses, **log_kwargs)
+        # log lr only during training
+        lr = self.lr_schedulers().get_last_lr()[0]
+        self.log('train/lr', lr, on_step=True, on_epoch=False, prog_bar=False, logger=True)
+        return losses
+
 
     def validation_step(self, batch, batch_idx):
-        return self._step_logic(batch, batch_idx, 'val')
+        self._step_logic(batch, batch_idx, 'val')
+        return 0
 
     def test_step(self, batch, batch_idx):
-        return self._step_logic(batch, batch_idx, 'test')
-
+        self._step_logic(batch, batch_idx, 'test')
+        return 0
 
     def _calc_metrics(self, stage: str) -> None:
         """
@@ -297,11 +339,92 @@ class DetectionLightningModule(pl.LightningModule):
         self._test_input_validated = False
 
     def on_validation_epoch_end(self) -> None:
-        self._calc_metrics('val')
+        if self.trainer.is_global_zero:  # only on GPU with rank:0
+            self._calc_metrics('val')
+
+        if (hasattr(self, 'logger') and
+            self.logger is not None and
+            isinstance(self.logger.experiment, torch.utils.tensorboard.writer.SummaryWriter) and
+            self.val_image_samples and
+            self.num_log_images > 0 and
+            not self.trainer.sanity_checking and
+            self.trainer.is_global_zero):
+
+            processed_images = []
+            for i, (img, pred, target) in enumerate(zip(self.val_image_samples, self.val_pred_samples, self.val_target_samples)):
+                if isinstance(img, list) and len(img) == 1 and isinstance(img[0], torch.Tensor):
+                    img_tensor = img[0]  # the image comes as a list of one element
+                elif isinstance(img, torch.Tensor):
+                    img_tensor = img
+                else:
+                    log(f"Skipping image log for sample {i}: Unexpected item type or structure in val_image_samples: {type(img)}")
+                    continue
+                # step 1 - denorm and convert to uint8
+                img_tensor_cpu = img_tensor.cpu()  # should alr. be on the cpu, but safety
+                img_denorm = self._denormalize_image(img_tensor_cpu)
+                img_uint8 = (img_denorm * 255).to(torch.uint8)
+
+                if img_uint8.dim() == 4 and img_uint8.shape[0] == 1:  # remove batch dim if present
+                    img_uint8 = img_uint8.squeeze(0)
+                if img_uint8.dim() != 3:
+                    continue
+
+                # step 2: prep pred boxes and labels (filter by score)
+                pred_cpu = {k: v.cpu() for k, v in pred.items()}
+                target_cpu = {k: v.cpu() for k, v in target.items()}
+
+                pred_scores = pred_cpu['scores']
+                score_mask = pred_scores >= LOG_SCORE_THRESHOLD
+                pred_boxes = pred_cpu['boxes'][score_mask]
+                pred_labels_indices = pred_cpu['labels'][score_mask]
+                pred_scores_filtered = pred_scores[score_mask]
+                pred_labels = [f"{CLASSES[label_idx]}: {score:.2f}"
+                               for label_idx, score in zip(pred_labels_indices, pred_scores_filtered)]
+
+                # step 3: prep gt boxes and labels
+                gt_boxes = target_cpu['boxes']
+                gt_labels_indices = target_cpu['labels']
+                gt_labels = [f"GT: {CLASSES[label_idx]}" for label_idx in gt_labels_indices]
+
+                # 4 draw boxes
+                img_with_boxes = img_uint8.clone()
+                if len(gt_boxes) > 0:
+                    try:
+                        img_with_boxes = draw_bounding_boxes(img_with_boxes, gt_boxes, labels=gt_labels, colors=GT_COLOR, width=2)
+                    except Exception as e:
+                        log(f"Error drawing GT boxes for sample {i}: {e}. GT Boxes shape: {gt_boxes.shape}, Labels: {gt_labels}")
+
+
+                if len(pred_boxes) > 0:
+                    try:
+                        img_with_boxes = draw_bounding_boxes(img_with_boxes, pred_boxes, labels=pred_labels, colors=PRED_COLOR, width=2)
+                    except Exception as e:
+                        log(f"Error drawing Pred boxes for sample {i}: {e}. Pred Boxes shape: {pred_boxes.shape}, Labels: {pred_labels}")
+                processed_images.append(img_with_boxes)
+
+
+            # 5. log all processed images at once using add_images
+            if processed_images:
+                try:
+                    image_batch = torch.stack(processed_images)
+                    self.logger.experiment.add_images(
+                        'Validation Image Samples',
+                        image_batch,
+                        global_step=self.current_epoch, # use epoch for the slider step
+                        dataformats='NCHW'
+                    )
+                except Exception as e:
+                    log(f"Error logging image batch to TensorBoard for epoch {self.current_epoch}: {e}")
+
+
+        self.val_image_samples.clear()
+        self.val_pred_samples.clear()
+        self.val_target_samples.clear()
+
 
     def on_test_epoch_end(self) -> None:
-        self._calc_metrics('test')
-
+        if self.trainer.is_global_zero:
+            self._calc_metrics('test')
 
     def configure_optimizers(self):
         """
@@ -536,3 +659,47 @@ class DetectionLightningModule(pl.LightningModule):
         return float(precision), float(recall), float(f1)
 
 
+    def _denormalize_image(self, image_tensor: torch.Tensor) -> torch.Tensor:
+        """De-normalize an image tensor using normalization params"""
+        if self.normalize_params is None:
+            log("Cannot de-normalize: normalize_params not available.")
+            return torch.clamp(image_tensor, 0, 1)
+
+        try:
+            mean_val, std_val = self.normalize_params['mean'], self.normalize_params['std']
+        except KeyError:
+            log("Cannot de-normalize: 'mean' or 'std' key missing in normalize_params.", show_func=False)
+            return torch.clamp(image_tensor, 0, 1)
+        except TypeError:
+            log("Cannot de-normalize: normalize_params is not a dictionary or None.", show_func=False)
+            return torch.clamp(image_tensor, 0, 1)
+
+        num_channels = image_tensor.shape[0]
+
+        if isinstance(mean_val, (float, int)):
+            mean = torch.full((num_channels,), mean_val, device=image_tensor.device)
+        else: # (assume list/tuple)
+            if len(mean_val) != num_channels:
+                log(f"Warning: De-norm mean length ({len(mean_val)}) doesn't match image channels ({num_channels}). Using first element.")
+                mean = torch.full((num_channels,), mean_val[0], device=image_tensor.device)
+            else:
+                mean = torch.tensor(mean_val, device=image_tensor.device)
+
+        if isinstance(std_val, (float, int)):
+            std = torch.full((num_channels,), std_val, device=image_tensor.device)
+        else:
+            if len(std_val) != num_channels:
+                log(f"Warning: De-norm std length ({len(std_val)}) doesn't match image channels ({num_channels}). Using first element.",
+                    show_func=False)
+                std = torch.full((num_channels,), std_val[0], device=image_tensor.device)
+            else:
+                std = torch.tensor(std_val, device=image_tensor.device)
+
+
+        # reshape mean/std to [C, 1, 1] for broadcast
+        mean, std = mean.view(num_channels, 1, 1), std.view(num_channels, 1, 1)
+
+        # de-normalize: (tensor * std) + mean
+        image_tensor = image_tensor * std + mean
+
+        return torch.clamp(image_tensor, 0, 1) # clamp to [0, 1] range as slight inaccuracies can push values outside

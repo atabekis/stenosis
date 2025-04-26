@@ -27,10 +27,10 @@ VAL_SIZE = 0.2
 TEST_SIZE = 0.1
 assert np.isclose(TRAIN_SIZE + VAL_SIZE + TEST_SIZE, 1), 'Train, Validation and Test sizes must sum to 1'
 
-CLASSES = ['__background__', 'stenosis']
+CLASSES = ['__background__', 'stenosis']  # binary task 1: stenosis, 0: background, one foreground class
 NUM_CLASSES = len(CLASSES)
 
-DEBUG = True
+DEBUG = False
 DEBUG_SIZE = 0.1  # keep % (DEBUG_SIZE * 100) of data
 
 NUM_WORKERS = get_optimal_workers() if not DEBUG else 4

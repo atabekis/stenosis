@@ -1,5 +1,7 @@
 #testbench.py
 import os
+from ast import parse
+
 import torch
 import random
 import argparse
@@ -16,11 +18,11 @@ from config import (
     SEED,
     NUM_CLASSES,
     CADICA_DATASET_DIR, DEBUG, NUM_WORKERS, POSITIVE_CLASS_ID,
+    FOCAL_LOSS_ALPHA, FOCAL_LOSS_GAMMA
 )
 from models.faster_rcnn import FasterRCNN
 
-from util import log, get_optimal_workers
-# from models.faster_rcnn import FasterRCNN, FasterRCNNLightningModule
+from util import log
 from models.retinanet_stage1 import Stage1RetinaNet
 
 
@@ -37,14 +39,16 @@ warnings.filterwarnings(
 )
 
 
+lr = 1e-3
+
 config_single_gpu = {
     'batch_size': 32,
     'num_workers': NUM_WORKERS,
     'strategy': None,
-    'learning_rate': 1e-4,
+    'learning_rate': lr,
     'weight_decay': 1e-4,
     'warmup_steps': 100,
-    'normalize_params': {'mean': 0.485, 'std': 0.229},
+    'normalize_params': {'mean': [0.485, 0.456, 0.406], 'std': [0.229, 0.224, 0.225]},
     'precision': '16-mixed',
     'repeat_channels': True
 }
@@ -53,10 +57,10 @@ config_multi_gpu = {
     'batch_size': 32,  # per gpu
     'num_workers': NUM_WORKERS,
     'strategy': 'ddp',
-    'learning_rate': 1e-4,
+    'learning_rate': lr,
     'weight_decay': 1e-4,
     'warmup_steps': 100,
-    'normalize_params': {'mean': 0.485, 'std': 0.229}, # Use floats
+    'normalize_params': {'mean': [0.485, 0.456, 0.406], 'std': [0.229, 0.224, 0.225]}, # Use floats
     'precision': '16-mixed',
     'repeat_channels': True
 }
@@ -79,8 +83,9 @@ if __name__ == '__main__':
     parser.add_argument('--use_augmentation', action=argparse.BooleanOptionalAction, default=True, help='Enable/disable data augmentation, default True')
     parser.add_argument('--effective_batch_size', type=int, default=32, help='Target effective batch size for gradient accumulation')
     # --- Model/Data specific ---
-    parser.add_argument('--detections_per_img', type=int, default=100, help='Max detections post-NMS')
+    # parser.add_argument('--detections_per_img', type=int, default=100, help='Max detections post-NMS')
     parser.add_argument('--pretrained', action=argparse.BooleanOptionalAction, default=True, help='Use pretrained backbone weights')
+    parser.add_argument('--debug', action=argparse.BooleanOptionalAction, default=DEBUG, help='Debug mode')
 
     args = parser.parse_args()
 
@@ -89,7 +94,9 @@ if __name__ == '__main__':
     os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
     os.environ['TORCH_USE_CUDA_DSA'] = "1"
 
-    pl.seed_everything(SEED); random.seed(SEED); np.random.seed(SEED); torch.manual_seed(SEED)
+    os.environ['SLURM_NTASKS_PER_NODE'] = '10'
+
+    pl.seed_everything(SEED)
     torch.set_float32_matmul_precision('high')
 
     if torch.cuda.is_available():
@@ -151,6 +158,7 @@ if __name__ == '__main__':
     run_config['accumulate_grad_batches'] = accumulate_grad_batches
     run_config['gpus'] = trainer_devices
 
+    log(f'Debug mode?: {args.debug}')
     log("--- Run Configuration ---")
     for key, value in run_config.items():
         log(f"   {key}: {value}")
@@ -159,15 +167,14 @@ if __name__ == '__main__':
         log(f"   Warning: Could not achieve exact effective batch size {args.effective_batch_size}. Using {effective_batch_size_achieved}.")
 
 
-    reader = Reader(dataset_dir=CADICA_DATASET_DIR)
+    reader = Reader(dataset_dir=CADICA_DATASET_DIR, debug=args.debug)
     xca_images = reader.xca_images
     xca_videos = reader.construct_videos()
 
-    # model = Stage1RetinaNet(
-    #     pretrained=args.pretrained,
-    #     detections_per_img=args.detections_per_img
-    # )
-    model = FasterRCNN()
+    model = Stage1RetinaNet(
+        pretrained=args.pretrained,
+    )
+    #  model = FasterRCNN()
 
     lightning_module = DetectionLightningModule(
         model=model,
@@ -178,9 +185,10 @@ if __name__ == '__main__':
         max_epochs=run_config['max_epochs'],
         batch_size=per_device_batch_size * max(1, num_target_gpus),
         accumulate_grad_batches=run_config['accumulate_grad_batches'],
-        focal_alpha=Stage1RetinaNet.FOCAL_LOSS_ALPHA,
-        focal_gamma=Stage1RetinaNet.FOCAL_LOSS_GAMMA,
+        focal_alpha=getattr(model, 'FOCAL_LOSS_ALPHA', FOCAL_LOSS_ALPHA),
+        focal_gamma=getattr(model, 'FOCAL_LOSS_GAMMA', FOCAL_LOSS_GAMMA),
         positive_class_id=POSITIVE_CLASS_ID,
+        normalize_params=run_config['normalize_params'],
     )
 
     trained_model = train_model(

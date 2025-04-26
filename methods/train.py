@@ -1,6 +1,6 @@
 # train.py
-from pathlib import WindowsPath
 # Pyton imports
+from pathlib import WindowsPath, Path
 from typing import List, Optional, Union
 
 # Torch imports
@@ -38,7 +38,6 @@ def train_model(
         precision: Optional[str] = None,
         accumulate_grad_batches: int = 1,
         strategy: Optional[str] = None,
-        save_dir: WindowsPath | str = MODEL_CHECKPOINTS_DIR,
         log_dir: str = LOGS_DIR,
 ):
     """
@@ -62,6 +61,8 @@ def train_model(
     :return: trained model
     """
 
+    Path(log_dir).mkdir(parents=True, exist_ok=True)
+
     data_module = XCADataModule(
         data_list=data_list,
         batch_size=batch_size,
@@ -72,12 +73,12 @@ def train_model(
         normalize_params=normalize_params
     )
 
+    experiment_name = f"{model.__class__.__name__}/{("augmented" if use_augmentation else "unaugmented")}"
 
-    save_dir = save_dir / ("augmented" if use_augmentation else "unaugmented")
+    logger = TensorBoardLogger(save_dir=log_dir, name=experiment_name)
 
     checkpoint_callback = ModelCheckpoint(
-        dirpath= save_dir,
-        filename= model.__class__.__name__ + '-v{version}-epoch{epoch:02d}-val_loss{val_loss:.4f}',
+        filename=model.__class__.__name__ + '-{epoch:02d}-{val_loss:.4f}',
         save_top_k=3,
         verbose=True,
         monitor='val_loss',
@@ -89,12 +90,10 @@ def train_model(
 
     early_stop_callback = EarlyStopping(
         monitor='val_loss',
-        patience=10,
+        patience=15,
         verbose=True,
         mode='min',
     )
-
-    logger = TensorBoardLogger(log_dir, name=model.__class__.__name__)
 
     trainer_kwargs = {
         'max_epochs': max_epochs,
