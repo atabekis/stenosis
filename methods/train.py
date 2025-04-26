@@ -93,6 +93,7 @@ def train_model(
         patience=15,
         verbose=True,
         mode='min',
+        log_rank_zero_only=True
     )
 
     trainer_kwargs = {

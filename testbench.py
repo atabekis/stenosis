@@ -39,7 +39,7 @@ warnings.filterwarnings(
 )
 
 
-lr = 1e-3
+lr = 1e-4
 
 config_single_gpu = {
     'batch_size': 32,
