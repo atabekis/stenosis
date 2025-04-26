@@ -12,7 +12,7 @@ from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
 
 # Image logging in TensorBoard
 from torchvision.utils import draw_bounding_boxes
-from pytorch_lightning.loggers import TensorBoardLogger
+from torch.utils.tensorboard import SummaryWriter
 
 # Python imports
 import os
@@ -344,7 +344,7 @@ class DetectionLightningModule(pl.LightningModule):
 
         if (hasattr(self, 'logger') and
             self.logger is not None and
-            isinstance(self.logger.experiment, torch.utils.tensorboard.writer.SummaryWriter) and
+            isinstance(self.logger.experiment, SummaryWriter) and
             self.val_image_samples and
             self.num_log_images > 0 and
             not self.trainer.sanity_checking and
