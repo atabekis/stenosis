@@ -7,13 +7,18 @@ import inspect
 import datetime
 import multiprocessing as mp
 
-COLORS = {
+_DEFAULT_COLORS = {
     "timestamp": "\033[92m", # green
     "filename": "\033[94m", # blue
     "funcname": "\033[95m", # pink
     "reset": "\033[0m" # reset the color
 }
 
+_is_slurm_env = 'SLURM_JOB_ID' in os.environ
+if _is_slurm_env:
+    COLORS = {key: "" for key in _DEFAULT_COLORS}
+else:
+    COLORS = _DEFAULT_COLORS
 
 def log(*args, verbose=True, show_func=True, omit_funcs=None, **kwargs):
     """
@@ -47,38 +52,6 @@ def log(*args, verbose=True, show_func=True, omit_funcs=None, **kwargs):
     message = ''.join(map(str, args))
     print("".join(parts), f"\"{message}\"", **kwargs)
 
-    # c_funcname = f"{COLORS['funcname']}{func_name}{COLORS['reset']}"
-
-    # message = ''.join(map(str, args))
-    #
-    # if verbose:
-    #     print(f"{c_timestamp}[{c_filename}.{c_funcname}] \"{message}\"", **kwargs)
-
-
-
-
-
-# def cache_data(filename: str, data: any = None,
-#                cache_data_dir = CACHED_DATA_DIR, use_cache = USE_CACHE,
-#                verbose: bool = True) -> any:
-#     """
-#     If data is provided, save it to the cache file path and return the data
-#     otherwise load and return the data from the cached file
-#     This function uses the CACHED_DATA_PATH which points to /project_root/.cache/data
-#     """
-#     if data is None:
-#         if os.path.exists(cache_data_dir / filename) and use_cache:
-#             log(f"Preprocessed XCA Images found, loading from cache: {filename}", verbose=verbose)
-#             with open(cache_data_dir / filename, 'rb') as f:
-#                 return pickle.load(f)
-#         else:
-#             return None
-#     else:
-#         if use_cache:
-#             log(f"Saving data to cache: {filename}", verbose=verbose)
-#             with open(cache_data_dir / filename, 'wb') as f:
-#                 pickle.dump(data, f)
-#             return data
 
 def get_optimal_workers():
     cpu_count = os.cpu_count() or mp.cpu_count()

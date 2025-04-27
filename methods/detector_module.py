@@ -19,6 +19,8 @@ import math
 import numpy as np
 from typing import Optional, Union, Any
 
+from win32trace import flush
+
 # Local imports
 from util import log
 from config import (
@@ -746,6 +748,6 @@ class DetectionLightningModule(pl.LightningModule):
         log_message += f"\n  {'val/AP_small:':<18} {ap_small:.4f}" if ap_small is not None else "\n  val/AP_small: N/A"
         log_message += "\n----------------------------------------------------"
 
-        log(log_message, verbose=self.slurm)
+        log(log_message, verbose=self.slurm, flush=True)
 
 

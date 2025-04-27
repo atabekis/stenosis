@@ -8,12 +8,16 @@ from typing import List, Optional, Union
 import torch
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import TensorBoardLogger
+from pytorch_lightning.profilers import PyTorchProfiler
+from torch.profiler import schedule, tensorboard_trace_handler
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from pytorch_lightning.strategies import DDPStrategy, SingleDeviceStrategy
+
 
 from methods.data_module import XCADataModule
 from methods.reader import XCAImage, XCAVideo
 
+from util import log
 from config import (
     MODEL_CHECKPOINTS_DIR, LOGS_DIR,
     TRAIN_SIZE, VAL_SIZE, TEST_SIZE,
@@ -40,6 +44,8 @@ def train_model(
         accumulate_grad_batches: int = 1,
         strategy: Optional[str] = None,
         log_dir: str = LOGS_DIR,
+        profiler_enabled: bool = False,
+        profiler_scheduler_conf: Optional[dict] = None,
 ):
     """
     Train given model, supports single and multi-gpu
@@ -56,9 +62,10 @@ def train_model(
     :param gpus: number of GPUs to use or list of GPU indices
     :param precision: precision mode
     :param strategy: distributed training strategy {'ddp', 'ddp_spawn', etc.} passed onto Trainer
-    :param save_dir: directory to save checkpoints
     :param log_dir: directory to save tensorboard logs
     :param accumulate_grad_batches: number of batches to accumulate for larger effective batch size
+    :param profiler_enabled: Whether PyTorch Lightning Profiler instance (e.g., PyTorchProfiler) activated
+    :param profiler_scheduler_conf: config dictionary for steps/warmup/cycle to be used by the profiler scheduler
     :return: trained model
     """
 
@@ -98,6 +105,25 @@ def train_model(
         log_rank_zero_only=True
     )
 
+
+    profiler = None
+    if profiler_enabled:
+        try:
+            prof_schedule = schedule(**profiler_scheduler_conf)
+            profiler = PyTorchProfiler(
+                schedule=prof_schedule,
+                on_trace_ready=tensorboard_trace_handler(dir_name=logger.log_dir, use_gzip=True),
+                profile_memory=True,
+                record_shapes=True,
+                with_stack=False,
+            )
+        except ImportError:
+            log("Error: `torch.profiler` related imports failed. Is PyTorch version sufficient (>=1.8)? Disabling profiler.")
+            profiler = None
+        except Exception as e:
+            log(f"Error configuring PyTorchProfiler: {e}. Disabling profiler.")
+            profiler = None
+
     trainer_kwargs = {
         'max_epochs': max_epochs,
         'callbacks': [checkpoint_callback, early_stop_callback, ],
@@ -107,6 +133,7 @@ def train_model(
         'accumulate_grad_batches': accumulate_grad_batches,
         'precision': precision,
         'enable_progress_bar': enable_pbar, # if SLURM env. do not print pbar
+        'profiler': profiler
     }
 
     if gpus == 0: # CPU

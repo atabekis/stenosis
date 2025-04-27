@@ -1,29 +1,33 @@
 #testbench.py
-import os
-from ast import parse
 
+# Python imports
+import os
 import torch
-import random
 import argparse
 import warnings
-import numpy as np
+from pathlib import Path
 
+# PL
 import pytorch_lightning as pl
+from pytorch_lightning.profilers import PyTorchProfiler
 
+
+# Local imports - methods
 from methods.reader import Reader
 from methods.train import train_model
 from methods.detector_module import DetectionLightningModule
 
-from config import (
-    SEED,
-    NUM_CLASSES,
-    CADICA_DATASET_DIR, DEBUG, NUM_WORKERS, POSITIVE_CLASS_ID,
-    FOCAL_LOSS_ALPHA, FOCAL_LOSS_GAMMA
-)
+# Local imports - models
 from models.faster_rcnn import FasterRCNN
-
-from util import log
 from models.retinanet_stage1 import Stage1RetinaNet
+
+# Local imports - controls & utility
+from util import log
+from config import (
+    SEED, DEBUG, NUM_WORKERS,
+    CADICA_DATASET_DIR, LOGS_DIR,
+    POSITIVE_CLASS_ID, FOCAL_LOSS_ALPHA, FOCAL_LOSS_GAMMA,
+)
 
 
 
@@ -36,6 +40,12 @@ warnings.filterwarnings(
     "ignore",
     message=r".*`training_step` returned `None`.*",
     category=UserWarning,
+)
+
+warnings.filterwarnings(
+    "ignore",
+    category=UserWarning,
+    message=r".*The epoch parameter in `scheduler.step\(\)` was not necessary.*",
 )
 
 
@@ -65,6 +75,12 @@ config_multi_gpu = {
     'repeat_channels': True
 }
 
+config_profile_scheduler = {
+    'wait': 1,   # steps to wait before start
+    'warmup': 1, # steps for warmup
+    'active': 3, # steps to actively record
+    'repeat': 2, # number of times to repeat wait/warmup/activate cycles
+}
 
 
 
@@ -87,6 +103,8 @@ if __name__ == '__main__':
     parser.add_argument('--pretrained', action=argparse.BooleanOptionalAction, default=True, help='Use pretrained backbone weights')
     parser.add_argument('--debug', action=argparse.BooleanOptionalAction, default=DEBUG, help='Debug mode')
 
+    parser.add_argument('--profile', action=argparse.BooleanOptionalAction, default=False, help='Enable PyTorch profiler')
+
     args = parser.parse_args()
 
 
@@ -94,7 +112,7 @@ if __name__ == '__main__':
     os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
     os.environ['TORCH_USE_CUDA_DSA'] = "1"
 
-    os.environ['SLURM_NTASKS_PER_NODE'] = '10'
+    # os.environ['SLURM_NTASKS_PER_NODE'] = '10'  #debugging slurm
 
     pl.seed_everything(SEED)
     torch.set_float32_matmul_precision('high')
@@ -159,6 +177,8 @@ if __name__ == '__main__':
     run_config['gpus'] = trainer_devices
 
     log(f'Debug mode?: {args.debug}')
+    log(f'Profiler?: {args.profile}')
+
     log("--- Run Configuration ---")
     for key, value in run_config.items():
         log(f"   {key}: {value}")
@@ -191,6 +211,9 @@ if __name__ == '__main__':
         normalize_params=run_config['normalize_params'],
     )
 
+
+
+
     trained_model = train_model(
         model=model,
         lightning_module=lightning_module,
@@ -206,4 +229,8 @@ if __name__ == '__main__':
 
         use_augmentation=run_config['use_augmentation'],
         repeat_channels=run_config['repeat_channels'],
+
+        profiler_enabled=args.profile,
+        profiler_scheduler_conf = config_profile_scheduler,
+        log_dir=LOGS_DIR,
     )
