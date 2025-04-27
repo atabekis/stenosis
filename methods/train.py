@@ -75,7 +75,7 @@ def train_model(
         normalize_params=normalize_params
     )
 
-    experiment_name = f"{model.__class__.__name__}/{("augmented" if use_augmentation else "unaugmented")}"
+    experiment_name = f"{model.__class__.__name__}/{('augmented' if use_augmentation else 'unaugmented')}"
 
     logger = TensorBoardLogger(save_dir=log_dir, name=experiment_name)
 
