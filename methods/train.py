@@ -140,6 +140,6 @@ def train_model(
 
     trainer = pl.Trainer(**trainer_kwargs)
     trainer.fit(lightning_module, data_module)
-    trainer.test(lightning_module, data_module, ckpt_path='best')
+    trainer.test(lightning_module, data_module, ckpt_path=checkpoint_callback.best_model_path)
     return lightning_module
 
