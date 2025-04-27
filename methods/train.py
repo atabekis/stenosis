@@ -1,5 +1,6 @@
 # train.py
 # Pyton imports
+import os
 from pathlib import WindowsPath, Path
 from typing import List, Optional, Union
 
@@ -62,6 +63,7 @@ def train_model(
     """
 
     Path(log_dir).mkdir(parents=True, exist_ok=True)
+    enable_pbar = not "SLURM_JOB_ID" in os.environ
 
     data_module = XCADataModule(
         data_list=data_list,
@@ -104,6 +106,7 @@ def train_model(
         'deterministic': False,
         'accumulate_grad_batches': accumulate_grad_batches,
         'precision': precision,
+        'enable_progress_bar': enable_pbar, # if SLURM env. do not print pbar
     }
 
     if gpus == 0: # CPU
@@ -137,6 +140,6 @@ def train_model(
 
     trainer = pl.Trainer(**trainer_kwargs)
     trainer.fit(lightning_module, data_module)
-    trainer.test(lightning_module, data_module)
+    trainer.test(lightning_module, data_module, ckpt_path='best')
     return lightning_module
 

@@ -1,5 +1,4 @@
 # detector_module.py
-from typing import Any, final
 
 # Torch imports
 import torch
@@ -17,7 +16,8 @@ from torch.utils.tensorboard import SummaryWriter
 # Python imports
 import os
 import math
-from typing import Optional, Union
+import numpy as np
+from typing import Optional, Union, Any
 
 # Local imports
 from util import log
@@ -34,7 +34,7 @@ from config import (
 # tensorboard logging
 PRED_COLOR = "blue"
 GT_COLOR = "green"
-LOG_SCORE_THRESHOLD = 0.0 # Only log predictions above this score
+LOG_SCORE_THRESHOLD = 0.0 # For the TensorBoard logger, boxes with confidence score > will be put on the image
 
 
 class DetectionLightningModule(pl.LightningModule):
@@ -123,6 +123,8 @@ class DetectionLightningModule(pl.LightningModule):
              log("Warning: normalize_params not provided to DetectionLightningModule. Cannot de-normalize images for logging.")
              self.num_log_images = 0
 
+
+        self.slurm = "SLURM_JOB_ID" in os.environ
 
 
     def forward(
@@ -302,24 +304,25 @@ class DetectionLightningModule(pl.LightningModule):
             cpu_targs = [{k: v.cpu() for k, v in t.items()} for t in targs_attr]
 
             ap_small = self.compute_ap_for_area(cpu_preds, cpu_targs, max_area=32**2)
-            precision, recall, f1 = self.compute_prf1(cpu_preds, cpu_targs, iou_threshold=0.5)
+            precision, recall, f1, avg_iou_tp = self.compute_prf1(cpu_preds, cpu_targs, iou_threshold=0.5)
 
             # log the rest
             extra = {
+                f"{prefix}AvgIoU_TP_0.5": avg_iou_tp,
                 f"{prefix}AP_small": ap_small,
                 f"{prefix}Precision_0.5": precision,
                 f"{prefix}Recall_0.5": recall,
                 f"{prefix}F1_0.5": f1,
             }
             for name, val in extra.items():
-                self.log(name, val, prog_bar=(name.endswith("F1_0.5") and prog_bar),
-                         logger=True, sync_dist=sync_dist)
+                prog_bar_extra = prog_bar and name.endswith(("F1_0.5", "AvgIoU_TP_0.5"))
+                self.log(name, val, prog_bar=prog_bar_extra ,logger=True, sync_dist=sync_dist)
 
         except Exception as e:
             log(f"Error computing {stage} metrics: {e}")
             zeros = {f"{prefix}{k}": 0.0 for k in
                      ["mAP_0.5", "mAP", "mAR_100", "AP_small",
-                      "Precision_0.5", "Recall_0.5", "F1_0.5"]}
+                      "Precision_0.5", "Recall_0.5", "F1_0.5", "AvgIoU_TP_0.5"]}
             self.log_dict(zeros, logger=True)
 
         finally:
@@ -341,6 +344,8 @@ class DetectionLightningModule(pl.LightningModule):
     def on_validation_epoch_end(self) -> None:
         if self.trainer.is_global_zero:  # only on GPU with rank:0
             self._calc_metrics('val')
+            self._slrum_print_metrics()  # in slurm, only print the metrics if we're on gpu:0
+
 
         if (hasattr(self, 'logger') and
             self.logger is not None and
@@ -595,15 +600,18 @@ class DetectionLightningModule(pl.LightningModule):
 
         return ap.item()
 
+
     def compute_prf1(self, predictions, targets, iou_threshold=0.5, score_threshold=0.5):
         """
         Computes Precision, Recall, and F1 score for the positive class (stenosis, label=1) at given IoU and score thresholds.
         """
         tp, fp, fn = 0, 0, 0
         num_gt_total, num_pred_total = 0, 0
+        tp_ious = []
 
-        device = predictions[0]['boxes'].device if predictions and 'boxes' in predictions[0] and predictions[0][
-            'boxes'].numel() > 0 else 'cpu'
+        device = predictions[0]['boxes'].device if predictions and 'boxes' in predictions[0] and predictions[0]['boxes'].numel() > 0 else 'cpu'
+        targets = [{k: v.to(device) for k,v in t.items()} for t in targets]
+        predictions = [{k: v.to(device) for k,v in p.items()} for p in predictions]
 
         for img_preds, img_targets in zip(predictions, targets):
             gt_boxes_all, gt_labels_all = img_targets['boxes'].to(device), img_targets['labels'].to(device)
@@ -618,6 +626,7 @@ class DetectionLightningModule(pl.LightningModule):
             # --- filter preds for pos. cls. id and score threshold ---
             pred_pos_mask = (pred_labels_all == self.positive_class_id) & (pred_scores_all >= score_threshold)
             pred_boxes = pred_boxes_all[pred_pos_mask]
+            pred_scores =pred_scores_all[pred_pos_mask]
             num_pred_img = pred_boxes.shape[0]
             num_pred_total += num_pred_img
 
@@ -634,14 +643,20 @@ class DetectionLightningModule(pl.LightningModule):
             pred_matched_to_gt = torch.zeros(num_pred_img, dtype=torch.bool, device=device)
             overlaps = box_iou(pred_boxes, gt_boxes)  # [num_pos_preds_above_thresh, num_pos_gts]
 
-            # greedy matching: iterate through predictions
-            for i in range(num_pred_img):
-                if overlaps.shape[1] == 0: continue  # no gts to match
-                best_iou, best_gt_idx = overlaps[i].max(dim=0)
+            sort_idx = torch.argsort(pred_scores, descending=True)  # sort preds by score
+
+            # greedy matching based on score
+            for i in sort_idx:
+                pred_idx = i.item()
+                if overlaps.shape[1] == 0: continue   # no gt boxes left
+                overlap_values = overlaps[pred_idx]
+                if overlap_values.numel()==0: continue  # case where gt boxes are empty
+                best_iou, best_gt_idx = overlap_values.max(dim=0)
                 if best_iou >= iou_threshold and not gt_matched[best_gt_idx]:
-                    # tp += 1 # increment overall TP count
                     gt_matched[best_gt_idx] = True
-                    pred_matched_to_gt[i] = True  # mark this prediction as a TP
+                    pred_matched_to_gt[best_gt_idx] = True
+                    tp_ious.append(best_iou.item())
+
 
             # calculate TPs for this image
             img_tp = pred_matched_to_gt.sum().item()
@@ -655,8 +670,9 @@ class DetectionLightningModule(pl.LightningModule):
         precision = tp / (tp + fp + 1e-9)
         recall = tp / (tp + fn + 1e-9)
         f1 = 2 * (precision * recall) / (precision + recall + 1e-9)
+        avg_iou_tp = np.mean(tp_ious) if tp_ious else 0.0
 
-        return float(precision), float(recall), float(f1)
+        return float(precision), float(recall), float(f1), float(avg_iou_tp)
 
 
     def _denormalize_image(self, image_tensor: torch.Tensor) -> torch.Tensor:
@@ -703,3 +719,33 @@ class DetectionLightningModule(pl.LightningModule):
         image_tensor = image_tensor * std + mean
 
         return torch.clamp(image_tensor, 0, 1) # clamp to [0, 1] range as slight inaccuracies can push values outside
+
+
+    def _slrum_print_metrics(self):
+        """Prints metrics of interest per validation epoch end, only in a slurm env, where pbar is diabled."""
+        metrics = self.trainer.callback_metrics
+        val_loss = metrics.get('val_loss')
+        map_50 = metrics.get('val/mAP_0.5')
+        map_all = metrics.get('val/mAP')
+        mar_100 = metrics.get('val/mAR_100')
+        f1_50 = metrics.get('val/F1_0.5')
+        avg_iou_tp = metrics.get('val/AvgIoU_TP_0.5')
+        precision_50 = metrics.get('val/Precision_0.5')
+        recall_50 = metrics.get('val/Recall_0.5')
+        ap_small = metrics.get('val/AP_Small')
+
+        log_message = f"\n--- Epoch {self.current_epoch} Validation Summary (Console Log) ---"
+        log_message += f"\n  {'val_loss:':<18} {val_loss:.4f}" if val_loss is not None else "\n  val_loss: N/A"
+        log_message += f"\n  {'val/mAP_0.5:':<18} {map_50:.4f}" if map_50 is not None else "\n  val/mAP_0.5: N/A"
+        log_message += f"\n  {'val/mAP:':<18} {map_all:.4f}" if map_all is not None else "\n  val/mAP: N/A"
+        log_message += f"\n  {'val/mAR_100:':<18} {mar_100:.4f}" if mar_100 is not None else "\n  val/mAR_100: N/A"
+        log_message += f"\n  {'val/F1_0.5:':<18} {f1_50:.4f}" if f1_50 is not None else "\n  val/F1_0.5: N/A"
+        log_message += f"\n  {'val/AvgIoU_TP_0.5:':<18} {avg_iou_tp:.4f}" if avg_iou_tp is not None else "\n  val/AvgIoU_TP_0.5: N/A"
+        log_message += f"\n  {'val/Precision_0.5:':<18} {precision_50:.4f}" if precision_50 is not None else "\n  val/Precision_0.5: N/A"
+        log_message += f"\n  {'val/Recall_0.5:':<18} {recall_50:.4f}" if recall_50 is not None else "\n  val/Recall_0.5: N/A"
+        log_message += f"\n  {'val/AP_small:':<18} {ap_small:.4f}" if ap_small is not None else "\n  val/AP_small: N/A"
+        log_message += "\n----------------------------------------------------"
+
+        log(log_message, verbose=self.slurm)
+
+

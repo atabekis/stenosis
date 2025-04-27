@@ -171,10 +171,10 @@ if __name__ == '__main__':
     xca_images = reader.xca_images
     xca_videos = reader.construct_videos()
 
-    model = Stage1RetinaNet(
-        pretrained=args.pretrained,
-    )
-    #  model = FasterRCNN()
+    # model = Stage1RetinaNet(
+    #     pretrained=args.pretrained,
+    # )
+    model = FasterRCNN()
 
     lightning_module = DetectionLightningModule(
         model=model,
