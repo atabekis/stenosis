@@ -34,6 +34,7 @@ def train_model(
         lightning_module,
         batch_size: int = 8,
         max_epochs: int = 50,
+        patience: int = 10,
         use_augmentation: bool = True,
         num_workers: int = NUM_WORKERS,
         repeat_channels: bool = True,
@@ -54,6 +55,7 @@ def train_model(
     :param data_list: list of XCAImage or XCAVideo objects
     :param batch_size: batch size for training (per gpu)
     :param max_epochs: maximum number of training epochs
+    :param patience: number of epochs to wait before early stopping
     :param use_augmentation: whether to use augmentation
     :param num_workers: number of cores/workers for data loaders
     :param repeat_channels: whether to repeat channels of grayscale image to 3-channel RGB
@@ -99,7 +101,7 @@ def train_model(
 
     early_stop_callback = EarlyStopping(
         monitor='val_loss',
-        patience=15,
+        patience=patience,
         verbose=True,
         mode='min',
         log_rank_zero_only=True

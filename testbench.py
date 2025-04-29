@@ -58,6 +58,7 @@ config_single_gpu = {
     'learning_rate': lr,
     'weight_decay': 1e-4,
     'warmup_steps': 100,
+    'patience': 10,
     'normalize_params': {'mean': [0.485, 0.456, 0.406], 'std': [0.229, 0.224, 0.225]},
     'precision': '16-mixed',
     'repeat_channels': True
@@ -70,6 +71,7 @@ config_multi_gpu = {
     'learning_rate': lr,
     'weight_decay': 1e-4,
     'warmup_steps': 100,
+    'patience': 10,
     'normalize_params': {'mean': [0.485, 0.456, 0.406], 'std': [0.229, 0.224, 0.225]}, # Use floats
     'precision': '16-mixed',
     'repeat_channels': True
@@ -191,10 +193,10 @@ if __name__ == '__main__':
     xca_images = reader.xca_images
     xca_videos = reader.construct_videos()
 
-    # model = Stage1RetinaNet(
-    #     pretrained=args.pretrained,
-    # )
-    model = FasterRCNN()
+    model = Stage1RetinaNet(
+        pretrained=args.pretrained,
+    )
+    # model = FasterRCNN()
 
     lightning_module = DetectionLightningModule(
         model=model,
@@ -221,6 +223,7 @@ if __name__ == '__main__':
 
         max_epochs=run_config['max_epochs'],
         batch_size=run_config['batch_size'],
+        patience=run_config['patience'],
         num_workers=run_config['num_workers'],
         normalize_params=run_config['normalize_params'],
         accumulate_grad_batches=run_config['accumulate_grad_batches'],
