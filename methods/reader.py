@@ -18,7 +18,7 @@ from pathlib import WindowsPath
 import config
 # Local imports
 from util import log
-from config import DEBUG, DEBUG_SIZE, DEFAULT_WIDTH, DEFAULT_HEIGHT
+from config import DEBUG, DEBUG_SIZE, DEFAULT_WIDTH, DEFAULT_HEIGHT, T_CLIP
 from config import DANILOV_DATASET_DIR, DANILOV_DATASET_PATH, CADICA_DATASET_DIR
 
 
@@ -26,8 +26,10 @@ class Reader:
     """
     Reads the dataset directory, finds all .bmp + .xml pairs, and constructs XCAImage objects
     """
-    def __init__(self, dataset_dir, debug=DEBUG) -> None:
+    def __init__(self, dataset_dir, debug=DEBUG, t_clip=T_CLIP) -> None:
         self.dataset_dir = dataset_dir
+        self.t_clip = t_clip
+
         self.xca_images = []
 
         self._which_dataset()
@@ -270,8 +272,11 @@ class Reader:
 
         with concurrent.futures.ThreadPoolExecutor() as executor:
             videos = list(executor.map(process_video, videos_dict.items()))
-        return sorted(videos, key=lambda v: (v.patient_id, v.video_id))
 
+        all_videos = sorted(videos, key=lambda v: (v.patient_id, v.video_id))
+
+        # finally, only get videos that are >= T_CLIP
+        return [v for v in all_videos if v.frame_count >= self.t_clip]
 
     def __repr__(self):
         return f"Reader(dataset_path='{self.dataset_path}', total_images={len(self.xca_images)})"
