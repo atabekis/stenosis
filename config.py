@@ -22,6 +22,11 @@ MODEL_CHECKPOINTS_DIR = PROJECT_ROOT / "model_checkpoints"
 
 DEFAULT_WIDTH, DEFAULT_HEIGHT = 512, 512  # pixels
 
+# -- !Important
+#  T_CLIP is used to clip the length of a video sequence to T_CLIP frames, this is applied universally
+#  If there exists videos where frame_count < T_CLIP, those videos will be discarded!
+T_CLIP = 8
+
 TRAIN_SIZE = 0.7
 VAL_SIZE = 0.2
 TEST_SIZE = 0.1
