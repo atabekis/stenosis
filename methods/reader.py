@@ -72,53 +72,53 @@ class Reader:
         agent is visible.
         Only the selectedVideos directory is used due to the same constraints.
         """
-        selected_videos = self.dataset_dir / 'selectedVideos'
-        selected_patients = sorted(
-            [v for v in selected_videos.iterdir() if v.is_dir()],
-            key=lambda x: int(x.name.lstrip('p'))  # for getting patients in the format p1, p2, p3, as Path obj.
-        )
+        base_dir = self.dataset_dir / 'selectedVideos'
+        if not base_dir.is_dir():
+            raise FileNotFoundError(f"No 'selectedVideos' folder in {self.dataset_dir}")
 
-        def classify_videos(patient_dir: WindowsPath):
-            """lesion, non-lesion, extract"""
-            lesion = (patient_dir / 'lesionVideos.txt').read_text().split('\n')[:-1]
-            nonlesion = (patient_dir / 'nonlesionVideos.txt').read_text().split('\n')[:-1]
-            return [patient_dir / v for v in lesion], [patient_dir / v for v in nonlesion]
+        tasks = []
+        patients = sorted(base_dir.iterdir(), key=lambda p: int(p.name.lstrip('p')))
+        for patient in patients:
+            for list_file, has_gt in (('lesionVideos.txt', True),
+                                      ('nonlesionVideos.txt', False)):
+                list_path = patient / list_file
+                if not list_path.exists():
+                    continue
+                video_dirs = [
+                    patient / name
+                    for name in list_path.read_text().splitlines()
+                    if name
+                ]
+                for video_dir in video_dirs:
+                    sel_frames = video_dir / f"{patient.name}_{video_dir.name}_selectedFrames.txt"
+                    if not sel_frames.exists():
+                        continue
+                    frame_names = [ln for ln in sel_frames.read_text().splitlines() if ln]
+                    input_dir = video_dir / 'input'
+                    gt_dir = video_dir / 'groundtruth' if has_gt else None
 
+                    for fn in frame_names:
+                        img_path = input_dir / f"{fn}.png"
+                        if not img_path.exists():
+                            continue
+                        ann = None
+                        if has_gt:
+                            gt_path = gt_dir / f"{fn}.txt"
+                            if gt_path.exists():
+                                ann = gt_path.read_text()
+                        tasks.append((img_path, ann))
 
-        def construct_xca(video_dir: WindowsPath, lesion: bool):
-            if not lesion:  # XCAImage.bbox = None
-                selected_frames = ((video_dir / f'{video_dir.parent.name}_{video_dir.name}_selectedFrames.txt')
-                                   .read_text().split('\n')[:-1])  # ooga-booga way of reading :)
-                selected_frames = [video_dir / "input" / f"{frame}.png" for frame in selected_frames]
+        def _make_image(task):
+            path, ann = task
+            try:
+                return XCAImage.from_cadica(path, ann)
+            except Exception:
+                return None
 
-                # Generate XCAImage instances from non-lesion videos meaning no bounding boxes / annotation
-                for frame_path in selected_frames:
-                    self.xca_images.append(
-                        XCAImage.from_cadica(frame_path, annotation=None)
-                    )
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            results = executor.map(_make_image, tasks)
 
-            if lesion:  # now we have the groundTruth to deal with as well
-                selected_frames = ((video_dir / f'{video_dir.parent.name}_{video_dir.name}_selectedFrames.txt')
-                                   .read_text().split('\n')[:-1])
-                selected_frames_paths = [video_dir / "input" / f"{frame}.png" for frame in selected_frames]
-                ground_truth_files = [video_dir / "groundtruth" / f"{frame}.txt" for frame in selected_frames]
-
-                for frame_path, truth in zip(selected_frames_paths, ground_truth_files):
-                    annotation = truth.read_text()
-
-                    # Generate XCAImage instances, now together with the ground truth annotations
-                    self.xca_images.append(
-                        XCAImage.from_cadica(frame_path, annotation=annotation)
-                    )
-
-        log("Building XCA images from the CADICA dataset...")
-
-        # Extract all lesion/nonlesion videos for each patient
-        lesion_videos, nonlesion_videos = map(list, zip(*[classify_videos(patient) for patient in selected_patients]))
-
-        # Construct all XCAImage instances
-        [construct_xca(v, lesion=True) for video in lesion_videos for v in video]
-        [construct_xca(v, lesion=False) for video in nonlesion_videos for v in video]
+        self.xca_images = [img for img in results if img is not None]
 
 
 
@@ -149,7 +149,6 @@ class Reader:
         return a random image from the subset.
         :return:
         """
-        import random
 
         subset = self.xca_images
 
@@ -222,7 +221,7 @@ class Reader:
 
             # fill the arrays
             for i, frame in enumerate(frames):
-                img = frame.get_image()
+                img = frame.image
 
                 if img.ndim == 3:  # redundancy: check if RGB, if so convert to grayscale
                     img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -309,7 +308,7 @@ class XCAImage:
         self.stenosis_severity = None  # p0_20 = 0% to 20% stenosis, p20_50 = ...  only in CADICA
 
         self.path = None
-        self._image = None  # lazy loading
+        self.image = None
 
         self.dataset = None
 
@@ -330,13 +329,13 @@ class XCAImage:
         instance._parse_filename()
 
         instance.path = os.path.join(dataset_path, instance.filename)
-        instance._image = None
-
-        for _, row in bbox_rows.iterrows():
-            xmin, ymin, xmax, ymax = int(row['xmin']), int(row['ymin']), int(row['xmax']), int(row['ymax'])
+        instance.image = cv2.imread(instance.path, cv2.IMREAD_UNCHANGED)
+        if instance.image is None:
+            raise IOError(f"Could not read image file: {instance.path}")
+        for _, r in bbox_rows.iterrows():
+            xmin, ymin, xmax, ymax = map(int, (r['xmin'], r['ymin'], r['xmax'], r['ymax']))
             instance.bbox.append((xmin, ymin, xmax, ymax))
         return instance
-
 
     @classmethod
     def from_cadica(cls, path: WindowsPath, annotation: str | None) -> 'XCAImage':
@@ -351,8 +350,9 @@ class XCAImage:
         instance._parse_annotation(annotation=annotation)  # for severity and bbox
 
         instance.path = path
-        instance._image = None
-
+        instance.image = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+        if instance.image is None:
+            raise IOError(f"Could not read image file: {path}")
         return instance
 
     def _parse_annotation(self, annotation: str | None):
@@ -392,11 +392,12 @@ class XCAImage:
     def get_image(self):
         """
         Lazy-loads and returns the image using cv2.imread."""
-        if self._image is None:
-            self._image = cv2.imread(self.path, cv2.IMREAD_UNCHANGED)
-            if self._image is None:
-                raise IOError(f"Could not read image file: {self.path}")
-        return self._image
+        return DeprecationWarning
+        # if self.image is None:
+        #     self.image = cv2.imread(self.path, cv2.IMREAD_UNCHANGED)
+        #     if self.image is None:
+        #         raise IOError(f"Could not read image file: {self.path}")
+        # return self.image
 
     def __repr__(self):
         return (f"XCAImage(patient={self.patient_id}, video={self.video_id}, frame={self.frame_nr}, "
@@ -433,7 +434,8 @@ if __name__ == "__main__":
     reader = Reader(dataset_dir=CADICA_DATASET_DIR)
     # print(len(reader.xca_images))
     videos = reader.construct_videos()
-    # print(len(videos))
+    images = reader.xca_images
+    print(len(images))
 
 
 

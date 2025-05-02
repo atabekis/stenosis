@@ -33,7 +33,7 @@ def show_xca_image(xca_image: XCAImage, overlay: bool = True, figsize=(6, 6)):
     """
     Display an XCAImage instance
     """
-    image = xca_image.get_image()
+    image = xca_image.image
 
     image = overlay_bbox(image, xca_image.bbox) if overlay else image
 
@@ -50,7 +50,7 @@ def image_to_gif(xca_images, output_path="output.gif", overlay=True, fps=1):
     """Construct GIF from a list of XCAImage instances."""
     frames = []
     for xca_image in xca_images:
-        image = xca_image.get_image()
+        image = xca_image.image
         image = overlay_bbox(image, xca_image.bbox) if overlay else image
 
         text = f"Patient: {xca_image.patient_id}, Video: {xca_image.video_id}, Frame: {xca_image.frame_nr}"

@@ -134,7 +134,7 @@ class XCADataset(Dataset):
                            else None)
                 else:
                     img_obj = self.data_list[item]
-                    arr = (img_obj.get_image()
+                    arr = (img_obj.image
                            if isinstance(img_obj, XCAImage)
                            else None)
             except Exception as e:
@@ -247,6 +247,7 @@ class XCADataset(Dataset):
             self.video_aug_params.clear()
         self.epoch += 1
 
+
     def _fetch_random_clip(self, video):
         # 1. Type & length checks
         if not isinstance(video, XCAVideo):
@@ -304,12 +305,7 @@ class XCADataset(Dataset):
 
 
     def _fetch_image(self, img):
-        if not isinstance(img, XCAImage):
-            raise TypeError(f'Non XCAImage type, got {type(img)}')
-
-        arr = img.get_image()
-        if not isinstance(arr, np.ndarray):
-            raise TypeError(f"get_image() did not return ndarray for {img}")
+        arr = img.image
 
         tensor = self._process_frame(arr, video_uid=None)
         target = self._get_target_dict(getattr(img, 'bbox', None))
