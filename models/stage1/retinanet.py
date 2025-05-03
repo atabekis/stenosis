@@ -1,9 +1,8 @@
-# retinanet_stage1.py
+# retinanet.py
 
 # Torch imports
 import torch
 import torch.nn as nn
-import pytorch_lightning as pl
 from torchvision.models.detection import RetinaNet
 from torchvision.models.detection.anchor_utils import AnchorGenerator
 
@@ -11,7 +10,7 @@ from torchvision.models.detection.anchor_utils import AnchorGenerator
 from typing import Union, Optional
 
 # Backbone model
-from models.backbone import EfficientNetFPNBackbone
+from models.stage1.backbone import EfficientNetFPNBackbone
 
 # Local imports
 from util import log
@@ -19,16 +18,12 @@ from config import (
     NUM_CLASSES,
     FOCAL_LOSS_ALPHA,
     FOCAL_LOSS_GAMMA,
-    GIOU_LOSS_COEF,
-    L1_LOSS_COEF,
-    CLS_LOSS_COEF,
-    POSITIVE_CLASS_ID,
 )
 
-class Stage1RetinaNet(nn.Module):
+class FPNRetinaNet(nn.Module):
     """
-    Implements the stage 1 RetinaNet model for single-frame detection
-    Uses the efficient net + FPN backbone and standard RetinaNet heads.
+    Implements the stage 1 FPNRetinaNet model for single-frame detection
+    Uses the efficient net + FPN backbone and standard FPNRetinaNet heads.
     """
 
     NUM_CLASSES = NUM_CLASSES
@@ -54,11 +49,11 @@ class Stage1RetinaNet(nn.Module):
             pretrained: bool = True,
     ):
         """
-         Initialize RetinaNet model
+         Initialize FPNRetinaNet model
         """
         super().__init__()
 
-        log("Initializing Stage1RetinaNet with parameters:")
+        log("Initializing FPNRetinaNet with parameters:")
         log(f"  Num classes: {self.NUM_CLASSES}")
         log(f"  FPN out channels: {self.FPN_OUT_CHANNELS}")
         log(f"  Anchor sizes: {self.ANCHOR_SIZES}")
@@ -82,7 +77,7 @@ class Stage1RetinaNet(nn.Module):
             aspect_ratios=self.ANCHOR_ASPECT_RATIOS,
         )
 
-        # 3. RetinaNet model
+        # 3. FPNRetinaNet model
         self.retinanet = RetinaNet(
             backbone=self.backbone,
             num_classes=self.NUM_CLASSES,
