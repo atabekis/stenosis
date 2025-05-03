@@ -441,8 +441,8 @@ if __name__ == '__main__':
 
 
     except ValueError as e:
-         log(f"Value Error during dataset init or processing: {e}", level='error')
+         log(f"Value Error during dataset init or processing: {e}")
     except Exception as e:
-        log(f"An unexpected error occurred in __main__: {e}", level='error')
+        log(f"An unexpected error occurred in __main__: {e}")
         import traceback
         traceback.print_exc()

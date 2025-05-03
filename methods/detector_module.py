@@ -142,7 +142,7 @@ class DetectionLightningModule(pl.LightningModule):
     def forward(
             self,
             images: Union[list[torch.Tensor], torch.Tensor],
-            targets: Optional[list[dict[str, torch.Tensor]]] = None) -> Any:
+            targets: Optional[Union[list[dict[str, torch.Tensor]], list[list[dict[str, torch.Tensor]]]]] = None) -> Any:
         """
         Forward pass of the model. Input format depends on the model stage
         :param images: input images
@@ -213,90 +213,95 @@ class DetectionLightningModule(pl.LightningModule):
         # --- 3. Shared val/test logic ---
         is_val = (step_type == 'val')
         # choose the right trackers
-        preds_flat_list = self.val_preds if is_val else self.test_preds
-        tgts_flat_list = self.val_targets if is_val else self.test_targets
+        preds_flat_storage = self.val_preds if is_val else self.test_preds
+        tgts_flat_storage = self.val_targets if is_val else self.test_targets
         metric = self.val_map if is_val else self.test_map
-        samples_imgs = self.val_image_samples if is_val else self.test_image_samples
-        samples_preds = self.val_pred_samples if is_val else self.test_pred_samples
-        samples_targets = self.val_target_samples if is_val else self.test_target_samples
+
+        # trackers for non-flat samples for tensorboard logging
+        samples_imgs_storage = self.val_image_samples if is_val else self.test_image_samples
+        samples_preds_storage = self.val_pred_samples if is_val else self.test_pred_samples
+        samples_targets_storage = self.val_target_samples if is_val else self.test_target_samples
         max_log = self.num_log_val_images if is_val else self.num_log_test_images
 
-        # model forward in eval mode
-        self.model.eval()
         with torch.no_grad():
             preds = self.model(images)
 
-        # flatten for metric & CPU copies
+        metric_preds_flat, metric_targets_flat = [], []
+        log_images_list, log_preds_list, log_targets_list = [], [], []
+
         if self.model_stage == 1:
-            metric_preds = preds
-            metric_targets = targets
-            log_images = images
-        else:
-            # stage 2/3: targets is List[List[dict]]
-            metric_preds = preds
-            metric_targets = [t for clip in targets for t in clip]
-            log_images = list(images)  # one Tensor(T,C,H,W) per batch entry
+            metric_preds_flat, metric_targets_flat = preds, targets
 
-        # update metric and store CPU copies
-        metric.update(metric_preds, metric_targets)
-        cpu_preds = [{k: v.cpu() for k, v in p.items()} for p in metric_preds]
-        cpu_tgts = [{k: v.cpu() for k, v in t.items()} for t in metric_targets]
-        preds_flat_list.extend(cpu_preds)
-        tgts_flat_list.extend(cpu_tgts)
+            if isinstance(images, torch.Tensor): log_images_list = list(images)
+            else: log_images_list = images
 
-        # --- 4. Collect few samples for TensorBoard ---
+            log_preds_list, log_targets_list = preds, targets
+
+
+        else:  # stage 2/3: preds=list[list[dict]], targets=list[list[dict]], images=T(B, T, C, H, W)
+            for clip_preds in preds:
+                metric_preds_flat.extend(clip_preds)
+            for clip_targets in targets:
+                metric_targets_flat.extend(clip_targets)
+
+            log_images_list, log_preds_list, log_targets_list = list(images), preds, targets
+
+        try:
+            metric.update(metric_preds_flat, metric_targets_flat)
+        except Exception as e:
+            log(f'Error updating {step_type} metric: {e}. Check pred/target format.')
+
+
+        # pass onto the cpu for metric calculation and log
+        cpu_preds_flat = [{k: v.cpu().detach() for k, v in p.items()} for p in metric_preds_flat]
+        cpu_tgts_flat = [{k: v.cpu().detach() for k, v in t.items()} for t in metric_targets_flat]
+        preds_flat_storage.extend(cpu_preds_flat)
+        tgts_flat_storage.extend(cpu_tgts_flat)
+
+        # 4. collect samples for tensorboard
         should_log = (
                 (is_val and not self.trainer.sanity_checking and max_log > 0) or
                 (not is_val and max_log not in (0, None))
         )
-        if should_log and len(samples_imgs) < (float('inf') if max_log == 'all' else max_log):
-            to_take = min(
-                (float('inf') if max_log == 'all' else max_log) - len(samples_imgs),
-                len(log_images)
-            )
-            # images
-            samples_imgs.extend(img.cpu() for img in log_images[:to_take])
+        num_currently_stored = len(samples_imgs_storage)
+        max_to_store = float('inf') if max_log == 'all' else max_log
 
-            # predictions & targets
-            if self.model_stage == 1:
-                samples_preds.extend({k: v.cpu() for k, v in p.items()} for p in preds[:to_take])
-                samples_targets.extend({k: v.cpu() for k, v in t.items()} for t in targets[:to_take])
-            else:
-                T = images.shape[1]
-                # preds: flat list; regroup into per‐clip lists
-                for i in range(to_take):
-                    start = i * T
-                    clip_pred = [
-                        {k: v.cpu() for k, v in preds[j].items()}
-                        for j in range(start, start + T)
-                    ]
-                    samples_preds.append(clip_pred)
-                    clip_tgt = [
-                        {k: v.cpu() for k, v in targets[i][f].items()}
-                        if f < len(targets[i]) else {}
-                        for f in range(T)
-                    ]
-                    samples_targets.append(clip_tgt)
+        if should_log and num_currently_stored < max_to_store:
+            num_items_in_batch = len(log_images_list)
+            to_take = min(max_to_store - num_currently_stored, num_items_in_batch)
 
-        # --- 5. Validation loss logging ---
+            for i in range(to_take):
+                samples_imgs_storage.append(log_images_list[i].cpu().detach())
+                samples_preds_storage.append([{k: v.cpu().detach() for k, v in p.items()} for p in
+                                              log_preds_list[i]] if self.model_stage != 1
+                                             else {k: v.cpu().detach() for k, v in log_preds_list[i].items()})
+
+                samples_targets_storage.append([{k: v.cpu().detach() for k, v in p.items()} for p in
+                                                log_targets_list[i]] if self.model_stage != 1
+                                               else {k: v.cpu().detach() for k, v in log_targets_list[i].items()})
+
+        # 5. validation loss logging
         if is_val:
             orig_mode = self.model.training
             self.model.train()
             with torch.no_grad():
+                # targets need to be on device for loss calc
                 if self.model_stage == 1:
                     loss_targets = [{k: v.to(self.device) for k, v in t.items()} for t in targets]
-                else:
-                    loss_targets = [
-                        [{k: v.to(self.device) for k, v in frame.items()} for frame in clip]
-                        for clip in targets
-                    ]
-                loss_dict = self.model(images, loss_targets)
+                    loss_images = [img.to(self.device) for img in images] if isinstance(images, list) else images.to(self.device)
+                else: # Stage 2/3
+                    loss_targets = [[{k: v.to(self.device) for k, v in frame.items()} for frame in clip] for clip in targets]
+                    loss_images = images.to(self.device)
+
+                loss_dict = self.forward(loss_images, loss_targets)
+
             self.model.train(orig_mode)
 
-            # sum up the tensor losses
+            # sum losses
             losses = [l for l in loss_dict.values() if isinstance(l, torch.Tensor)]
             total_loss = sum(losses) if losses else torch.tensor(0., device=self.device)
 
+            # log validation losses
             log_args = dict(
                 on_step=False, on_epoch=True, prog_bar=False,
                 logger=True, sync_dist=True,
@@ -305,7 +310,8 @@ class DetectionLightningModule(pl.LightningModule):
             for name, value in loss_dict.items():
                 if isinstance(value, torch.Tensor):
                     self.log(f'val/{name}', value, **log_args)
-            self.log('val_loss', total_loss, **log_args)
+            self.log('val_loss', total_loss, **log_args) # Show total loss on progress bar
+
 
 
     def training_step(self, batch, batch_idx):
@@ -313,41 +319,51 @@ class DetectionLightningModule(pl.LightningModule):
         images, targets, _ = batch # Unpack batch
         if targets is None: raise ValueError("Targets must be provided during training")
 
-        # we make sure targets are on the correct device
-        targets_on_device = [{k: v.to(self.device) for k, v in t.items()} for t in targets]
+        loss_dict = self.forward(images, targets)
 
-        loss_dict = self.model(images, targets_on_device)
-        if not loss_dict:
-            log(f"Epoch {self.current_epoch}, Step {self.global_step}: Loss dictionary is empty.")
-            losses = torch.tensor(0.0, device=self.device, requires_grad=True) # ensure loss is on correct device and requires grad
+        # loss processing and logging
+        if not isinstance(loss_dict, dict) or not loss_dict:
+            log(f"Epoch {self.current_epoch}, Step {self.global_step}: Invalid or empty loss dictionary returned by model: {loss_dict}")
+            total_loss = torch.tensor(0.0, device=self.device, requires_grad=True)
+            loss_dict = {} # ensure loop below doesn't fail
         else:
-            valid_losses = [loss for loss in loss_dict.values() if isinstance(loss, torch.Tensor)]
-            if not valid_losses: losses = torch.tensor(0.0, device=self.device, requires_grad=True)
-            else: losses = sum(valid_losses)
+            valid_losses = [loss for loss in loss_dict.values() if isinstance(loss, torch.Tensor) and loss.requires_grad]
+            if not valid_losses:
+                log(f"Epoch {self.current_epoch}, Step {self.global_step}: No tensor losses found in loss dictionary: {loss_dict}")
+                total_loss = torch.tensor(0.0, device=self.device, requires_grad=True)
+            else:
+                total_loss = sum(valid_losses)
 
-        # -------- logging & progress bar
-        log_kwargs = {'on_step': True, 'on_epoch': True, 'prog_bar': True, 'logger': True, 'sync_dist': True, 'batch_size': len(images)}
-        if loss_dict:
-            for k,v in loss_dict.items():
-                 if isinstance(v, torch.Tensor):
-                    self.log(f'train/{k}', v, **log_kwargs)
-        self.log(f'train/loss', losses, **log_kwargs)
+        # log individual losses and total loss
+        batch_size = images.size(0) if isinstance(images, torch.Tensor) else len(images)
+        log_kwargs = {'on_step': True, 'on_epoch': True, 'prog_bar': True, 'logger': True, 'sync_dist': True, 'batch_size': batch_size}
 
-        # log lr only during training
+        for k, v in loss_dict.items():
+            if isinstance(v, torch.Tensor):
+                self.log(f'train/{k}', v.detach(), **log_kwargs)
+
+        self.log(f'train_loss', total_loss.detach(), **log_kwargs)
+
+        # log lr
         scheduler = self.lr_schedulers()
+        current_lr = 0.0
         if scheduler:
-            lr = scheduler.get_last_lr()[0]
-            self.log('train/lr', lr, on_step=True, on_epoch=False, prog_bar=False, logger=True)
-        return losses
+            current_lr = scheduler.get_last_lr()[0] # For single schedulers
+
+        self.log('train/lr', current_lr, on_step=True, on_epoch=False, prog_bar=False, logger=True, batch_size=batch_size)
+
+        return total_loss
 
 
     def validation_step(self, batch, batch_idx):
         self._step_logic(batch, batch_idx, 'val')
         return 0
 
+
     def test_step(self, batch, batch_idx):
         self._step_logic(batch, batch_idx, 'test')
         return 0
+
 
     def _calc_metrics(self, stage: str) -> None:
         """
@@ -360,7 +376,16 @@ class DetectionLightningModule(pl.LightningModule):
         # prog_bar + sync_dist only for validation
         prog_bar = stage == "val"
         sync_dist = stage == "val"
-        # choose logger
+
+        if not preds_attr or not targs_attr:
+            log(f"Skipping {stage} metrics calculation: No predictions or targets collected.")
+            # log zeros to prevent crashing later
+            zeros = {f"{prefix}{k}": 0.0 for k in
+                     ["mAP_0.5", "mAP", "mAR_100", "AP_small",
+                      "Precision_0.5", "Recall_0.5", "F1_0.5", "AvgIoU_TP_0.5"]}
+            self.log_dict(zeros, logger=True, batch_size=1, sync_dist=sync_dist)
+            map_obj.reset(); preds_attr.clear(); targs_attr.clear()
+            return
 
         try:
             # compute mAP/mAR
@@ -412,6 +437,7 @@ class DetectionLightningModule(pl.LightningModule):
     def on_train_start(self) -> None:
         self._train_input_validated = False
 
+
     def on_validation_start(self) -> None:
         if not self.trainer.sanity_checking:
             self._val_input_validated = False
@@ -421,6 +447,7 @@ class DetectionLightningModule(pl.LightningModule):
             self.val_image_samples.clear()
             self.val_pred_samples.clear()
             self.val_target_samples.clear()
+
 
     def on_test_start(self) -> None:
         self._test_input_validated = False
@@ -458,7 +485,6 @@ class DetectionLightningModule(pl.LightningModule):
         self.val_image_samples.clear()
         self.val_pred_samples.clear()
         self.val_target_samples.clear()
-
 
 
     def on_test_epoch_end(self) -> None:
@@ -792,29 +818,50 @@ class DetectionLightningModule(pl.LightningModule):
             return
 
         to_log = []
-        for img, pred, target in zip(image_samples, pred_samples, target_samples):
-            # 1. pick a single (C,H,W) tensor
-            if not isinstance(img, torch.Tensor):
-                continue
-            if img.dim() == 4:  # clip: pick middle frame
-                t = img.shape[0] // 2
-                img = img[t]
-            if img.dim() != 3:
+        num_logged = 0
+
+        for i in range(len(image_samples)):
+            img_sample = image_samples[i]  # T(C,H,W) or T(T,C,H,W)
+            pred_sample = pred_samples[i]  # dict or list[dict]
+            target_sample = target_samples[i]  # dict or list[dict]
+
+            pred_frame = None
+            target_frame = None
+
+            # 1. pick a single frame (C,H,W) tensor and its pred/target
+            if not isinstance(img_sample, torch.Tensor): continue
+
+            if img_sample.dim() == 3:  # Stage 1: single frame T(C,H,W)
+                img_frame = img_sample
+                if isinstance(pred_sample, dict): pred_frame = pred_sample
+                if isinstance(target_sample, dict): target_frame = target_sample
+
+            elif img_sample.dim() == 4:  # Stage 2/3: Clip T(T,C,H,W)
+                t = img_sample.shape[0] // 2  # pick middle frame index
+                img_frame = img_sample[t]
+                if isinstance(pred_sample, list) and len(pred_sample) > t: pred_frame = pred_sample[t]
+                if isinstance(target_sample, list) and len(target_sample) > t: target_frame = target_sample[t]
+
+            else:  # unexpected dimension
                 continue
 
-            # 2. denorm & convert to uint8
-            img_cpu = img.cpu()
+            # ensure valid data for the chosen frame
+            if img_frame is None or pred_frame is None or target_frame is None: continue
+
+            # 2. denorm & convert to uint8 [3, H, W]
+            img_cpu = img_frame.cpu()
             img_denorm = self._denormalize_image(img_cpu).clamp(0, 1) * 255
             img_uint8 = img_denorm.to(torch.uint8)
-            if img_uint8.shape[0] == 1:
+            if img_uint8.shape[0] == 1:  # 3 channels for drawing
                 img_uint8 = img_uint8.repeat(3, 1, 1)
-            if img_uint8.shape[0] != 3:
+            if img_uint8.shape[0] != 3:  # skip if failed
                 continue
 
-            # 3. filter predictions by score threshold
-            scores = pred.get('scores', torch.tensor([], device='cpu'))
-            boxes = pred.get('boxes', torch.zeros((0, 4), device='cpu'))
-            labels = pred.get('labels', torch.tensor([], device='cpu', dtype=torch.int64))
+            # 3. prepare preds (filter by score)
+            scores = pred_frame.get('scores', torch.tensor([])).cpu()
+            boxes = pred_frame.get('boxes', torch.zeros((0, 4))).cpu()
+            labels = pred_frame.get('labels', torch.tensor([], dtype=torch.int64)).cpu()
+
             mask = scores >= LOG_SCORE_THRESHOLD
             boxes_p = boxes[mask]
             labels_p = labels[mask].tolist()
@@ -825,9 +872,9 @@ class DetectionLightningModule(pl.LightningModule):
                 if 0 <= l < len(CLASSES)
             ]
 
-            # 4. prepare ground-truth
-            boxes_gt = target.get('boxes', torch.zeros((0, 4), device='cpu'))
-            labels_gt = target.get('labels', torch.tensor([], device='cpu', dtype=torch.int64)).tolist()
+            # 4. prepare gt
+            boxes_gt = target_frame.get('boxes', torch.zeros((0, 4))).cpu()
+            labels_gt = target_frame.get('labels', torch.tensor([], dtype=torch.int64)).cpu().tolist()
             gt_texts = [
                 f"GT:{CLASSES[l]}"
                 for l in labels_gt
@@ -836,16 +883,27 @@ class DetectionLightningModule(pl.LightningModule):
 
             # 5. draw boxes
             img_plot = img_uint8.clone()
-            if boxes_gt.shape[0] == len(gt_texts):
-                img_plot = draw_bounding_boxes(img_plot, boxes_gt, labels=gt_texts, colors=GT_COLOR, width=2)
-            if boxes_p.shape[0] == len(pred_texts):
-                img_plot = draw_bounding_boxes(img_plot, boxes_p, labels=pred_texts, colors=PRED_COLOR, width=2)
+            if boxes_gt.shape[0] > 0 and boxes_gt.shape[0] == len(gt_texts):
+                try:
+                    img_plot = draw_bounding_boxes(img_plot, boxes_gt, labels=gt_texts, colors=GT_COLOR, width=2)
+                except Exception as draw_e:
+                    log(f"Error drawing GT boxes: {draw_e}", level='warning')
+            if boxes_p.shape[0] > 0 and boxes_p.shape[0] == len(pred_texts):
+                try:
+                    img_plot = draw_bounding_boxes(img_plot, boxes_p, labels=pred_texts, colors=PRED_COLOR, width=2)
+                except Exception as draw_e:
+                    log(f"Error drawing Pred boxes: {draw_e}", level='warning')
 
             to_log.append(img_plot)
+            num_logged += 1
 
-            if to_log:
+        if to_log:
+            try:
                 batch = torch.stack(to_log, dim=0)
                 writer.add_images(tag, batch, global_step, dataformats='NCHW')
+                log(f"Logged {len(to_log)} image samples to TensorBoard tag '{tag}' at step {global_step}.", verbose=False)
+            except Exception as e:
+                log(f"Error stacking or logging images to TensorBoard: {e}", level='error')
 
 
     def _slrum_print_metrics(self):

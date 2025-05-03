@@ -111,6 +111,24 @@ class XCADataModule(pl.LightningDataModule):
 
         self.train_data, self.val_data, self.test_data = self._split_data()
 
+        # small logging
+        add = 'videos' if self.using_video_format else 'images'
+        is_video = self.using_video_format
+        count = lambda dl: (
+            sum(
+                getattr(item, 'has_lesion', False)
+                if is_video
+                else getattr(item, 'bbox', None) is not None
+                for item in dl
+            ),
+            len(dl)
+        )
+        splits = {'Train Set': count(self.train_data), 'Validation Set': count(self.val_data), 'Test Set': count(self.test_data)}
+
+        for name, (pos, total) in splits.items():
+            neg = total - pos
+            log(f"   {name:15}: {total} {add:2} ({pos} positive / {neg} negative)")
+
         # temporarily create train dataset to extract norm. params
         if self.normalize_params is None:
             if self.train_data:
@@ -192,7 +210,7 @@ class XCADataModule(pl.LightningDataModule):
     def _validate_dataset_samples(dataset, dataset_name, num_samples=5):
         """Validate a few samples to catch potential issues, handling image and video."""
         if len(dataset) == 0:
-            log(f"Skipping validation for {dataset_name}: Dataset is empty.", level='warning')
+            log(f"Skipping validation for {dataset_name}: Dataset is empty.")
             return
 
         log(f"Validating {num_samples} samples from {dataset_name}...")
