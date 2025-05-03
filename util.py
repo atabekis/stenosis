@@ -55,7 +55,8 @@ def log(*args, verbose=True, show_func=True, omit_funcs=None, **kwargs):
 
 def get_optimal_workers():
     cpu_count = os.cpu_count() or mp.cpu_count()
-    return max(1, cpu_count - 2)
+    # return max(1, cpu_count - 2)
+    return 8
 
 
 def to_numpy(*tensors):

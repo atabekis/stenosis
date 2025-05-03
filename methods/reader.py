@@ -115,6 +115,8 @@ class Reader:
             except Exception:
                 return None
 
+        log('Building XCA images from the CADICA dataset...')
+
         with concurrent.futures.ThreadPoolExecutor() as executor:
             results = executor.map(_make_image, tasks)
 
@@ -207,7 +209,7 @@ class Reader:
         for key in videos_dict:
             videos_dict[key].sort(key=lambda x: x.frame_nr)  # sort frames by frame_nr
 
-        videos = []
+        # videos = []
 
         def process_video(key_frames):
             (patient_id, video_id), frames = key_frames

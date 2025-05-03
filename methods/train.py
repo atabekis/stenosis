@@ -44,6 +44,7 @@ def train_model(
         precision: Optional[str] = None,
         accumulate_grad_batches: int = 1,
         strategy: Optional[str] = None,
+        deterministic: bool = True,
         log_dir: str = LOGS_DIR,
         profiler_enabled: bool = False,
         profiler_scheduler_conf: Optional[dict] = None,
@@ -64,6 +65,7 @@ def train_model(
     :param gpus: number of GPUs to use or list of GPU indices
     :param precision: precision mode
     :param strategy: distributed training strategy {'ddp', 'ddp_spawn', etc.} passed onto Trainer
+    :param deterministic: whether to enable deterministic training
     :param log_dir: directory to save tensorboard logs
     :param accumulate_grad_batches: number of batches to accumulate for larger effective batch size
     :param profiler_enabled: Whether PyTorch Lightning Profiler instance (e.g., PyTorchProfiler) activated
@@ -131,7 +133,7 @@ def train_model(
         'callbacks': [checkpoint_callback, early_stop_callback, ],
         'logger': logger,
         'log_every_n_steps': 10,
-        'deterministic': False,
+        'deterministic': deterministic,
         'accumulate_grad_batches': accumulate_grad_batches,
         'precision': precision,
         'enable_progress_bar': enable_pbar, # if SLURM env. do not print pbar

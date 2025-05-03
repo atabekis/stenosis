@@ -36,7 +36,7 @@ CLASSES = ['__background__', 'stenosis']  # binary task 1: stenosis, 0: backgrou
 NUM_CLASSES = len(CLASSES)
 
 DEBUG = False
-DEBUG_SIZE = 0.1  # keep % (DEBUG_SIZE * 100) of data
+DEBUG_SIZE = 0.25  # keep % (DEBUG_SIZE * 100) of data
 
 NUM_WORKERS = get_optimal_workers() if not DEBUG else 4
 
