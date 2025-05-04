@@ -224,8 +224,7 @@ class XCADataset(Dataset):
         """Processes raw bounding box into a target dictionary."""
         bboxes_tensor = torch.zeros((0, 4), dtype=torch.float32)
         labels_tensor = torch.zeros((0,), dtype=torch.int64)
-
-        if isinstance(raw_bbox, (list, tuple)) and len(raw_bbox) == 4:
+        if isinstance(raw_bbox, (list, tuple, np.ndarray)) and len(raw_bbox) == 4:
              try:
                   coords = [float(c) for c in raw_bbox]
                   x_coords = sorted(coords[0::2]) # [x_min, x_max]
@@ -234,10 +233,10 @@ class XCADataset(Dataset):
                   y1, y2 = y_coords
 
                   if x2 > x1 and y2 > y1:
-                       bboxes_tensor = torch.tensor([[x1, y1, x2, y2]], dtype=torch.float32)
-                       labels_tensor = torch.tensor([1], dtype=torch.int64) # Assuming class 1 for lesion
+                      bboxes_tensor = torch.tensor([[x1, y1, x2, y2]], dtype=torch.float32)
+                      labels_tensor = torch.tensor([1], dtype=torch.int64) # class 1 for lesion
              except (ValueError, TypeError) as e:
-                  log(f"Error processing bbox {raw_bbox}: {e}", level='warning')
+                  log(f"Error processing bbox {raw_bbox}: {e}")
 
         return {'boxes': bboxes_tensor, 'labels': labels_tensor}
 
@@ -329,6 +328,8 @@ class XCADataset(Dataset):
 
         item = self.data_list[idx]
         if self.using_video_format:
+            debug = self._fetch_random_clip(item)
+            i, t, m = debug
             return self._fetch_random_clip(item)
         else:
             return self._fetch_image(item)

@@ -64,7 +64,6 @@ class XCADataModule(pl.LightningDataModule):
         self.train_data, self.val_data, self.test_data = None, None, None
         self.train_dataset, self.val_dataset, self.test_dataset = None, None, None
 
-
     def _split_data(self):
         """
         Split the data on video level to prevent data leakage.
