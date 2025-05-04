@@ -29,17 +29,12 @@ from config import (
 
 
 def train_model(
-        data_list: list[Union['XCAImage', 'XCAVideo']],
         model,
+        data_module,
         lightning_module,
-        batch_size: int = 8,
         max_epochs: int = 50,
         patience: int = 10,
         use_augmentation: bool = True,
-        num_workers: int = NUM_WORKERS,
-        repeat_channels: bool = True,
-        normalize_params: dict[str, Union[float, int]] = None,
-        train_val_test_split: tuple[float, float, float] = (TRAIN_SIZE, VAL_SIZE, TEST_SIZE),
         gpus: Optional[Union[int, List[int]]] = None,
         precision: Optional[str] = None,
         accumulate_grad_batches: int = 1,
@@ -52,16 +47,11 @@ def train_model(
     """
     Train given model, supports single and multi-gpu
     :param model: model to be trained
+    :param data_module: PyTorch Lightning data module
     :param lightning_module the main training module using pl.LightningModule
-    :param data_list: list of XCAImage or XCAVideo objects
-    :param batch_size: batch size for training (per gpu)
     :param max_epochs: maximum number of training epochs
     :param patience: number of epochs to wait before early stopping
     :param use_augmentation: whether to use augmentation
-    :param num_workers: number of cores/workers for data loaders
-    :param repeat_channels: whether to repeat channels of grayscale image to 3-channel RGB
-    :param normalize_params: normalization parameters, expected in the format {mean: x, std: y}
-    :param train_val_test_split: ratio of train/val/test split
     :param gpus: number of GPUs to use or list of GPU indices
     :param precision: precision mode
     :param strategy: distributed training strategy {'ddp', 'ddp_spawn', etc.} passed onto Trainer
@@ -75,16 +65,6 @@ def train_model(
 
     Path(log_dir).mkdir(parents=True, exist_ok=True)
     enable_pbar = not "SLURM_JOB_ID" in os.environ
-
-    data_module = XCADataModule(
-        data_list=data_list,
-        batch_size=batch_size,
-        num_workers=num_workers,
-        train_val_test_split=train_val_test_split,
-        use_augmentation=use_augmentation,
-        repeat_channels=repeat_channels,
-        normalize_params=normalize_params
-    )
 
     experiment_name = f"{model.__class__.__name__}/{('augmented' if use_augmentation else 'unaugmented')}"
 

@@ -322,15 +322,11 @@ class Experiment:
 
         return train_model(
             # core objects
-            data_list=self.data_module.data_list,
+            data_module=self.data_module,
             model=self.model,
             lightning_module=self.lightning_module,
 
             # data & augmentation settings
-            batch_size=rc['batch_size'],
-            num_workers=rc['num_workers'],
-            normalize_params=rc['normalize_params'],
-            repeat_channels=rc['repeat_channels'],
             use_augmentation=rc['use_augmentation'],
 
             # trainer hyperparameters
