@@ -277,7 +277,10 @@ class Reader:
         all_videos = sorted(videos, key=lambda v: (v.patient_id, v.video_id))
 
         # finally, only get videos that are >= T_CLIP
-        return [v for v in all_videos if v.frame_count >= self.t_clip]
+        filtered = [v for v in all_videos if v.frame_count >= self.t_clip]
+        log(f"t_clip={self.t_clip!r}: kept {len(filtered)} videos, dropped {len(all_videos) - len(filtered)}")
+        return filtered
+
 
     def __repr__(self):
         return f"Reader(dataset_path='{self.dataset_path}', total_images={len(self.xca_images)})"
