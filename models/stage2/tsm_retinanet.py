@@ -97,27 +97,33 @@ class TSMRetinaNet(nn.Module):
         self.head.classification_head.focal_loss_gamma = self.FOCAL_LOSS_GAMMA
 
         # 4. retinanet internals needed for loss/postprocess, we will 'borrow' params from a dummy retinanet instance
+        _dummy_retinanet = self._get_dummy_torchvision_retinanet()
+        self.box_coder = _dummy_retinanet.box_coder
+        self.compute_loss = _dummy_retinanet.compute_loss
+
+        self.score_thresh = _dummy_retinanet.score_thresh
+        self.nms_thresh = _dummy_retinanet.nms_thresh
+        self.detections_per_img = _dummy_retinanet.detections_per_img
+
+        self.postprocess_detections = _dummy_retinanet.postprocess_detections
+
+
+    def _get_dummy_torchvision_retinanet(self) -> RetinaNet:
+        """Creates a minimal RetinaNet instance to borrow methods/attributes."""
         _dummy_backbone = nn.Module()
         _dummy_backbone.out_channels = self.FPN_OUT_CHANNELS
-        _dummy_retinanet = RetinaNet(
+        return RetinaNet(
             backbone=_dummy_backbone,
             num_classes=self.NUM_CLASSES,
             anchor_generator=self.anchor_generator,
             score_thresh=self.SCORE_THRESH,
             nms_thresh=self.NMS_THRESH,
-            detections_per_img=self.DETECTIONS_PER_IMAGE_AFTER_NMS
+            detections_per_img=self.DETECTIONS_PER_IMAGE_AFTER_NMS,
         )
 
-        self.box_coder = _dummy_retinanet.box_coder
-        self.compute_loss = _dummy_retinanet.compute_loss
 
-        self.score_thresh = self.SCORE_THRESH
-        self.nms_thresh = self.NMS_THRESH
-        self.detections_per_img = self.DETECTIONS_PER_IMAGE_AFTER_NMS
-
-
-    def set_inference_params(self, score_thresh, nms_thresh, detections_per_img):
-        """Update parameters used during inference postprocessing"""
+    def set_inference_params(self, score_thresh: float, nms_thresh: float, detections_per_img: int):
+        """Update parameters used during inference postprocessing."""
         self.score_thresh = score_thresh
         self.nms_thresh = nms_thresh
         self.detections_per_img = detections_per_img
@@ -145,69 +151,89 @@ class TSMRetinaNet(nn.Module):
             raise ValueError("In training mode, targets should be passed.")
 
         B, T, C, H, W = videos.shape
+
         if T != self.t_clip:
             log(f"Warning: Input T dimension ({T}) != model t_clip ({self.t_clip}).")
 
 
-        # 1. get features from tsm backbone
+        # 1. get features from tsm backbone & feature prep
         features = self.backbone(videos)
 
-        # 2. flatten batch & time dims
-        feats_flat = {k: v.flatten(0, 1) for k, v in features.items()}  # [B*T, C', H', W']
-        videos_flat = videos.flatten(0, 1)  # [B*T, C, H, W]
+        # 2. prep inputs for head and anchors
+        feature_maps = list(features.values())
+
+        videos_flat = videos.contiguous().view(-1, C, H, W)  # [B*T, C, H, W]
+        images_list = ImageList(videos_flat, [(H, W)] * (B * T))
 
         # 3. generate anchors
-        sizes_flat = [(H, W)] * (B * T)
-        img_list = ImageList(videos_flat, sizes_flat)
-        anchors = self.anchor_generator(img_list, list(feats_flat.values()))
+        anchors = self.anchor_generator(images_list, feature_maps)
 
-        # 4. pass features thru retinanet head
-        head_out = self.head(feats_flat)
+        # 4. pass through retinanet head
+        head_out = self.head(feature_maps) # {cls_logits: tensor[B*T, A, K], bbox_regression: tensor[B*T, A, 4]}
+
+        # 5. compute loss
+        detections: Union[dict[str, torch.Tensor], list[dict[str, torch.Tensor]]]
+
         if self.training:
-            targets_flat = list(chain.from_iterable(targets))
-            return self.compute_loss(targets_flat, head_out, anchors)
-        else: # inference
-            cls_logits, bbox_reg = head_out['cls_logits'], head_out['bbox_regression']
+            # flatten targets (B lists of length T) → flat list of len B*T
+            device = videos.device
+            flat_targets = [
+                {k: v.to(device) for k, v in t.items()}
+                if isinstance(t, dict) and 'boxes' in t and 'labels' in t
+                else {
+                    'boxes': torch.empty((0, 4), device=device),
+                    'labels': torch.empty((0,), dtype=torch.int64, device=device)
+                }
+                for t in chain.from_iterable(targets)
+            ]
+            return self.compute_loss(flat_targets, head_out, anchors)
+
+        else:  # inference
+            cls_logits = head_out['cls_logits']  # [B*T, A, K]
+            bbox_reg = head_out['bbox_regression']  # [B*T, A, 4]
+
             detections = []
+            # pre‐compute class labels tensor for K-1 real classes
+            device = cls_logits.device
+            num_classes = cls_logits.size(-1)
+            class_ids = torch.arange(1, num_classes, device=device)
 
-            for i in range(B * T):
-                # decode & clip
-                props = self.box_coder.decode_single(bbox_reg[i], anchors[i])
-                props = box_ops.clip_boxes_to_image(props, sizes_flat[i])
+            for logits_i, reg_i, anchors_i, img_size in zip(
+                    cls_logits, bbox_reg, anchors, images_list.image_sizes
+            ):
+                # decode & clip boxes
+                boxes = self.box_coder.decode_single(reg_i, anchors_i)
+                boxes = box_ops.clip_boxes_to_image(boxes, img_size)
 
-                # scores & threshold
-                scores = cls_logits[i].sigmoid()  # [N_anchors, num_classes]
-                mask = scores > self.score_thresh
-                if not mask.any():
-                    # no detections
-                    detections.append({
-                        "boxes": props.new_empty((0, 4)),
-                        "scores": props.new_empty((0,)),
-                        "labels": props.new_empty((0,), dtype=torch.int64)
-                    })
-                    continue
+                # compute scores and drop background class
+                scores = logits_i.sigmoid()[:, 1:]  # [A, K-1]
+                # expand boxes to match each class
+                A = boxes.size(0)
+                boxes = boxes[:, None, :].expand(A, num_classes - 1, 4).reshape(-1, 4)
+                scores = scores.reshape(-1)
+                labels = class_ids.repeat_interleave(A)  # [A*(K-1)]
 
-                # gather all (anchor_idx, class_idx) pairs above threshold
-                idxs = mask.nonzero(as_tuple=False)  # [M, 2]
-                anc_idx = idxs[:, 0]
-                cls_idx = idxs[:, 1]
-                scores_k = scores[anc_idx, cls_idx]
-                boxes_k = props[anc_idx]
+                # threshold + remove tiny boxes
+                keep = scores > self.score_thresh
+                boxes, scores, labels = boxes[keep], scores[keep], labels[keep]
+                keep = box_ops.remove_small_boxes(boxes, min_size=1e-2)
+                boxes, scores, labels = boxes[keep], scores[keep], labels[keep]
 
-                keep = batched_nms(boxes_k, scores_k, cls_idx, self.nms_thresh)
+                # batched NMS & top-k
+                keep = box_ops.batched_nms(boxes, scores, labels, self.nms_thresh)
                 keep = keep[: self.detections_per_img]
-
                 detections.append({
-                    "boxes": boxes_k[keep],
-                    "scores": scores_k[keep],
-                    "labels": cls_idx[keep]
+                    'boxes': boxes[keep],
+                    'scores': scores[keep],
+                    'labels': labels[keep],
                 })
 
-            # 6. un-flatten: list[B*T] → list[B][T]
+            # reshape to [B][T]
             return [
-                detections[b * T: (b + 1) * T]
+                detections[b * T:(b + 1) * T]
                 for b in range(B)
             ]
+
 
 
 
@@ -225,14 +251,21 @@ class RetinaNetHead(nn.Module):
             in_channels, num_anchors
         )
 
-    def forward(self, x: list[torch.Tensor]) -> dict[str, torch.Tensor]:
-        if isinstance(x, dict):
-            x = list(x.values())
 
-        cls_logits = self.classification_head(x)
-        bbox_regression = self.regression_head(x)
+    def forward(self, x: Union[list[torch.Tensor], dict[str, torch.Tensor]]) -> dict[str, torch.Tensor]: # Accept dict or list
+        """
+        Processes features from FPN levels.
+        :param x: List of tensors (one per FPN level) or Dict mapping level name to tensor.
+        :return: Dictionary containing 'cls_logits' and 'bbox_regression' tensors,
+                 where predictions from all levels are concatenated along the anchor dimension.
+        """
+        if isinstance(x, dict):
+            x = [x[k] for k in sorted(x, key=int)]
+        elif not isinstance(x, list):
+            raise TypeError(f"Expected list or dict for features, got {type(x)}")
 
         return {
-            'cls_logits': cls_logits,
-            'bbox_regression': bbox_regression
+            'cls_logits': self.classification_head(x),
+            'bbox_regression': self.regression_head(x),
         }
+

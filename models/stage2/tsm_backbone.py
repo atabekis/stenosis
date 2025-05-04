@@ -39,10 +39,6 @@ class TemporalShift(nn.Module):
 
         if shift_mode not in ['residual', 'inplace']:
             raise ValueError(f"shift_mode must be 'residual' or 'inplace', got {shift_mode}")
-        if n_segments <= 1:
-            # cannot shift if T=1, act as identity
-            n_segments = 1
-            n_div = 1
 
         self.n_segments = n_segments
         self.n_div = n_div
@@ -57,47 +53,74 @@ class TemporalShift(nn.Module):
             x.shape = [B * T, C, H, W] during training
                       [B, C, H, W] during inference
         """
-        if self.n_segments <= 1:  # no shift possible if T=1
-            return x
 
         N, C, H, W = x.size()
-        B = N // self.n_segments  # calculate original batch size
         T = self.n_segments
 
-        x_reshaped = x.view(B, T, C, H, W)
-
-        # calc. number of channels to shift
-        fold = C // self.n_div
-        if fold == 0:  # case where C < n_div
+        # Cannot shift if T=1, n_div is invalid, or too few channels
+        if T <= 1 or self.n_div <= 0 or C < self.n_div:
             return x
 
-        if self.shift_mode == 'residual':
-            out = x_reshaped.clone()  # copy to add shifted features to
-        else:
-            out = x_reshaped  # directly modify in place
+        B = N // T   # get original batch size
 
-        # ------- Shift forward (channels 0 to fold-1) --------
-        # slice channels to be shifted forward [B, T, fold, H, W]
-        shifted_forward = out[:, :, :fold, :, :]
-        shifted_forward = torch.roll(shifted_forward, shifts=-1,
-                                     dims=1)  # roll among time dim: shift left by 1 step (t → t-1)
-        shifted_forward[:, 0, :, :, :] = 0  # zero-pad the first frame T=0 since it doesnt have a prior frame
-        out[:, :, :fold, :, :] = shifted_forward  # assign to the out tensor
+        x_reshaped = x.view(B, T, C, H, W)  # construct original 5d tensor
+        fold = C // self.n_div  # number channels to shift in each direction
 
-        # ------- Shift backward (channels fold to 2*fold-1) --------
-        shifted_backward = out[:, :, fold: 2 * fold, :, :]  # slice out [B, T, fold, H, W]
-        shifted_backward = torch.roll(shifted_backward, shifts=1,
-                                      dims=1)  # roll among time dim: shift right by 1 step (t → t+1)
-        shifted_backward[:, T - 1, :, :,
-        :] = 0  # zero-pad the last frame (T=T-1) which has no future frame to shift from
-        out[:, :, fold: 2 * fold, :, :] = shifted_backward
+        out = x_reshaped.clone()
 
         if self.shift_mode == 'residual':
-            final_out = x_reshaped + out
-        else:
-            final_out = out
+            # shift forward (t-1 -> t) for channels [0, fold), add values from t=0..T-2 to output at t=1..T-1
+            out[:, 1:, :fold, :, :] += x_reshaped[:, :-1, :fold, :, :]
 
-        return final_out.view(N, C, H, W)
+            # shift backward (t+1 -> t) for channels [fold, 2*fold) add values from t=1..T-1 to output at t=0..T-2
+            out[:, :-1, fold:2 * fold, :, :] += x_reshaped[:, 1:, fold:2 * fold, :, :]
+
+
+        elif self.shift_mode == 'inplace':
+            # forward shift
+            shifted_forward = torch.roll(out[:, :, :fold, :, :], shifts=-1, dims=1)
+            shifted_forward[:, 0, :, :, :] = 0  # zero-pad first frame
+            out[:, :, :fold, :, :] = shifted_forward  # replace slice
+
+            # backward shift
+            shifted_backward = torch.roll(out[:, :, fold: 2 * fold, :, :], shifts=1, dims=1)
+            shifted_backward[:, T - 1, :, :, :] = 0  # zero-pad last frame
+            out[:, :, fold: 2 * fold, :, :] = shifted_backward  # replace slice
+
+        return out.view(N, C, H, W)  # back to id.
+
+
+
+
+
+
+
+
+
+
+
+        # # ------- Shift forward (channels 0 to fold-1) --------
+        # # slice channels to be shifted forward [B, T, fold, H, W]
+        # shifted_forward = out[:, :, :fold, :, :]
+        # shifted_forward = torch.roll(shifted_forward, shifts=-1,
+        #                              dims=1)  # roll among time dim: shift left by 1 step (t → t-1)
+        # shifted_forward[:, 0, :, :, :] = 0  # zero-pad the first frame T=0 since it doesnt have a prior frame
+        # out[:, :, :fold, :, :] = shifted_forward  # assign to the out tensor
+        #
+        # # ------- Shift backward (channels fold to 2*fold-1) --------
+        # shifted_backward = out[:, :, fold: 2 * fold, :, :]  # slice out [B, T, fold, H, W]
+        # shifted_backward = torch.roll(shifted_backward, shifts=1,
+        #                               dims=1)  # roll among time dim: shift right by 1 step (t → t+1)
+        # shifted_backward[:, T - 1, :, :,
+        # :] = 0  # zero-pad the last frame (T=T-1) which has no future frame to shift from
+        # out[:, :, fold: 2 * fold, :, :] = shifted_backward
+        #
+        # if self.shift_mode == 'residual':
+        #     final_out = x_reshaped + out
+        # else:
+        #     final_out = out
+        #
+        # return final_out.view(N, C, H, W)
 
     def __repr__(self):
         return f"{self.__class__.__name__}(n_segments={self.n_segments}, n_div={self.n_div}, shift_mode='{self.shift_mode}')"
@@ -142,26 +165,30 @@ class TSMEfficientNetFPNBackbone(nn.Module):
         weights = models.EfficientNet_B0_Weights.IMAGENET1K_V1 if pretrained else None
         effnet = models.efficientnet_b0(weights=weights)
 
+        self.original_features = effnet.features
+
         # --- inserting the TSM modules ------
         # target states (indices in effnet.features) that feed into the FPN
         target_state_indices = [3, 5, 6]
-        self._insert_tsm(effnet.features, target_state_indices)
+        self._insert_tsm(self.original_features, target_state_indices)
 
         # --- define FPN layers ---
         # Map effnet features indices to FPN input keys
         # index 3: out stride 8 (40 ch.) -> fpn Level p3 input ('0')
         # index 5: out stride 16 (112 ch.) -> fpn Level p4 input ('1')
         # index 6: out stride 32 (192 ch.) -> fpn Level p5 input ('2')
-        return_layers = {'3': '0', '5': '1', '6': '2'}
+        fpn_input_layer_indices = {'0': 3, '1': 5, '2': 6,}
+        return_layers = {str(idx): key for key, idx in fpn_input_layer_indices.items()}
 
-        # channel counts for the selected layers
-        in_channels_list = [
-            effnet.features[3][-1].out_channels,  # Last block of stage 3
-            effnet.features[5][-1].out_channels,  # stage 5
-            effnet.features[6][-1].out_channels  # stage 6
-        ]
+        in_channels_list = []
+        for idx in fpn_input_layer_indices.values():
+            last_block = self.original_features[idx][-1]
+            if not isinstance(last_block, MBConv):
+                raise TypeError(f"Expected MBConv at end of feature stage {idx}, but got {type(last_block)}")
+            in_channels_list.append(last_block.out_channels)
 
-        self.body = IntermediateLayerGetter(effnet.features, return_layers=return_layers)
+
+        self.body = IntermediateLayerGetter(self.original_features, return_layers=return_layers)
 
         # FPN
         self.fpn = FeaturePyramidNetwork(
@@ -223,9 +250,4 @@ class TSMEfficientNetFPNBackbone(nn.Module):
         features = self.body(x_reshaped)  # dict: {'0': [BT, C0, H0, W0], '1': [BT, C1, H1, W1], ...}
         fpn_features = self.fpn(features)  # dict: {'0': [BT, FPN_C, H0, W0], '1': [BT, FPN_C, H1, W1], ...}
 
-        output_features = {}
-        for key, value in fpn_features.items():
-            _, FPN_C, H_prime, W_prime = value.shape
-            output_features[key] = value.view(B, T, FPN_C, H_prime, W_prime)
-
-        return output_features
+        return fpn_features
