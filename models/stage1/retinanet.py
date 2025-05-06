@@ -28,10 +28,10 @@ class FPNRetinaNet(nn.Module):
 
     NUM_CLASSES = NUM_CLASSES
     FPN_OUT_CHANNELS = 256
-    ANCHOR_SIZES = (  # smaller anchor sizes used
-        (16, 24, 32),
-        (48, 64, 96),
-        (128, 192, 256)
+    ANCHOR_SIZES = (
+        (8, 11, 16),  #  smaller objects
+        (22, 32, 45),  # medium objects
+        (64, 90, 128)  # larger objects
     )
     ANCHOR_ASPECT_RATIOS = ((0.5, 1.0, 2.0),) * len(ANCHOR_SIZES)
 
@@ -42,7 +42,7 @@ class FPNRetinaNet(nn.Module):
     FOCAL_LOSS_ALPHA = FOCAL_LOSS_ALPHA
     FOCAL_LOSS_GAMMA = FOCAL_LOSS_GAMMA
 
-    DETECTIONS_PER_IMAGE_AFTER_NMS = 20
+    DETECTIONS_PER_IMAGE_AFTER_NMS = 1
 
     def __init__(
             self,
