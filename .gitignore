@@ -3,6 +3,7 @@
 .backburner.txt
 
 deprecated
+debug
 
 data/CADICA/nonselectedVideos
 data/CADICA/selectedVideos
@@ -14,6 +15,8 @@ data/DANILOV/timing_test.xlsx
 data/DANILOV/timing_val.xlsx
 data/DANILOV/test_labels.csv
 data/DANILOV/train_labels.csv
+
+models/stage2_deprecated
 
 logs/*
 !logs/.gitkeep
