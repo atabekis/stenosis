@@ -1,30 +1,22 @@
 # train.py
+
 # Pyton imports
 import os
-from pathlib import WindowsPath, Path
+from pathlib import Path
 from typing import List, Optional, Union
 
 # Torch imports
 import torch
 import pytorch_lightning as pl
+from pytorch_lightning.strategies import DDPStrategy
 from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.profilers import PyTorchProfiler
 from torch.profiler import schedule, tensorboard_trace_handler
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
-from pytorch_lightning.strategies import DDPStrategy, SingleDeviceStrategy
 
-
-from methods.data_module import XCADataModule
-from methods.reader import XCAImage, XCAVideo
-
+# Local imports
 from util import log
-from config import (
-    MODEL_CHECKPOINTS_DIR, LOGS_DIR,
-    TRAIN_SIZE, VAL_SIZE, TEST_SIZE,
-    NUM_WORKERS, POSITIVE_CLASS_ID
-
-)
-
+from config import LOGS_DIR
 
 
 
@@ -34,6 +26,7 @@ def train_model(
         lightning_module,
         max_epochs: int = 50,
         patience: int = 10,
+        gradient_clip_val: float = 1.0,
         use_augmentation: bool = True,
         gpus: Optional[Union[int, List[int]]] = None,
         precision: Optional[str] = None,
@@ -110,6 +103,7 @@ def train_model(
 
     trainer_kwargs = {
         'max_epochs': max_epochs,
+        'gradient_clip_val': gradient_clip_val,
         'callbacks': [checkpoint_callback, early_stop_callback, ],
         'logger': logger,
         'log_every_n_steps': 10,
@@ -130,8 +124,8 @@ def train_model(
             trainer_kwargs['devices'] = 1
         else:
             trainer_kwargs['accelerator'] = 'gpu'
-            trainer_kwargs['devices'] = gpus # Pass the int or list
-    else: # Includes gpus='auto' or gpus=None (should not happen if testbench sends 'auto' or 0/1/[...])
+            trainer_kwargs['devices'] = gpus
+    else:
         trainer_kwargs['accelerator'] = 'auto'
         trainer_kwargs['devices'] = 'auto'
 
@@ -151,6 +145,14 @@ def train_model(
 
     trainer = pl.Trainer(**trainer_kwargs)
     trainer.fit(lightning_module, data_module)
-    trainer.test(lightning_module, data_module, ckpt_path=checkpoint_callback.best_model_path)
-    return lightning_module
+
+    ckpt = checkpoint_callback.best_model_path or 'last'
+    trainer.test(lightning_module, datamodule=data_module, ckpt_path=ckpt)
+
+    return {
+        "trainer": trainer,
+        "logger": logger,
+        "checkpoint_callback": checkpoint_callback,
+    }
+
 
