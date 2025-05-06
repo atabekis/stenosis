@@ -1,15 +1,15 @@
 # experiment.py
-
+import os
 # Python imports
 import sys
 import argparse
 import warnings
 import traceback
 
-
 # Torch + PL
 import torch
 import pytorch_lightning as pl
+from pytorch_lightning.loggers import TensorBoardLogger
 
 # Local imports - methods
 from methods.reader import Reader
@@ -27,7 +27,7 @@ from config import (
     SEED, DEBUG, NUM_WORKERS,
     CADICA_DATASET_DIR, LOGS_DIR,
     TRAIN_SIZE, VAL_SIZE, TEST_SIZE,
-    POSITIVE_CLASS_ID, FOCAL_LOSS_ALPHA, FOCAL_LOSS_GAMMA, CLASSES, T_CLIP
+    POSITIVE_CLASS_ID, FOCAL_LOSS_ALPHA, FOCAL_LOSS_GAMMA, T_CLIP
 )
 
 # --- Default base configs ---
@@ -65,6 +65,8 @@ DEFAULT_PROFILER_SCHEDULER = {
 warnings.filterwarnings("ignore", message=r".*Checkpoint directory .* exists and is not empty.*", category=UserWarning)
 warnings.filterwarnings("ignore", message=r".*`training_step` returned `None`.*", category=UserWarning)
 warnings.filterwarnings("ignore", message=r".*The epoch parameter in `scheduler.step\(\)` was not necessary.*", category=UserWarning)
+warnings.filterwarnings("ignore", message=r"Detected call of `lr_scheduler.step\(\)` before `optimizer.step\(\)`", category=UserWarning)
+
 
 
 def setup_reproducibility(seed, deterministic):
@@ -121,6 +123,8 @@ class Experiment:
         )
         torch.set_float32_matmul_precision('high')
 
+        os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+
 
     def _determine_devices_and_strategy(self):
         """
@@ -154,7 +158,7 @@ class Experiment:
         else:
             raise ValueError(f"Unsupported type for 'gpus' config: {type(gpus_cfg)}")
 
-        # 2. Choose strategy: user override or DDP if multi-GPU
+        # 2. Choose strategy
         strategy = cfg.get('strategy')
         if strategy is None and num_gpus > 1:
             strategy = 'ddp'
@@ -182,7 +186,7 @@ class Experiment:
         if self.run_config.get('strategy') is None:
             base['strategy'] = default_strategy
 
-        # 2. Merge base & user config (user keys win)
+        # 2. Merge base & user config
         self.run_config.update({**base, **self.config})
 
         # 3. Compute accumulate_grad_batches
@@ -205,7 +209,6 @@ class Experiment:
         reader = Reader(
             dataset_dir=rc['dataset_dir'],
             debug=rc['debug'],
-            t_clip=rc['t_clip'],
         )
 
         stage = rc['model_stage']
@@ -247,8 +250,8 @@ class Experiment:
         elif stage == 2:
             self.model = TSMRetinaNet(
                 t_clip=self.run_config['t_clip'],
-                tsm_div=self.run_config.get('tsm_div', 8),
-                tsm_shift_mode=self.run_config.get('tsm_shift_mode', 'residual'),
+                shift_fraction=self.run_config.get('tsm_shift_fraction', 0.125),
+                shift_mode=self.run_config.get('tsm_shift_mode', 'residual'),
                 pretrained_backbone=pretrained,
             )
 
@@ -267,6 +270,22 @@ class Experiment:
         cfg = self.run_config
         effective_bs = cfg['batch_size'] * max(1, cfg['num_target_gpus'])
 
+        hparams_to_log = {
+            'lr': cfg['learning_rate'],
+            'eff_batch_size': cfg['effective_batch_size_achieved'],
+            'weight_decay': cfg['weight_decay'],
+            'warmup_steps': cfg['warmup_steps'],
+            'use_augmentation': cfg['use_augmentation'],
+            'model_stage': cfg['model_stage'],
+            'focal_alpha': cfg.get('focal_alpha', FOCAL_LOSS_ALPHA),
+            'focal_gamma': cfg.get('focal_gamma', FOCAL_LOSS_GAMMA),
+        }
+        if cfg['model_stage'] == 2:
+             hparams_to_log['tsm_div'] = cfg.get('tsm_div')
+             hparams_to_log['tsm_shift_mode'] = cfg.get('tsm_shift_mode')
+             hparams_to_log['t_clip'] = cfg.get('t_clip')
+
+
         self.lightning_module = DetectionLightningModule(
             model=self.model,
             model_stage=cfg['model_stage'],
@@ -283,6 +302,7 @@ class Experiment:
             normalize_params=cfg['normalize_params'],
             num_log_val_images=cfg.get('num_log_val_images', 1),
             num_log_test_images=cfg.get('num_log_test_images', 'all'),
+            hparams_to_log=hparams_to_log
         )
 
     def _print_config_summary(self):
@@ -320,7 +340,7 @@ class Experiment:
 
         rc = self.run_config
 
-        return train_model(
+        results = train_model(
             # core objects
             data_module=self.data_module,
             model=self.model,
@@ -343,6 +363,9 @@ class Experiment:
             profiler_enabled=rc.get('profiler_enabled', False),
             profiler_scheduler_conf=rc.get('profiler_scheduler_conf'),
         )
+
+
+        return results
 
 
 
@@ -375,7 +398,7 @@ if __name__ == "__main__":
     parser.add_argument("--t_clip", type=int, default=T_CLIP)
 
     # Model-specific: TSM
-    parser.add_argument("--tsm_div", type=int, default=8)
+    parser.add_argument("--tsm_shift_fraction", type=int, default=0.125)
     parser.add_argument("--tsm_shift_mode", type=str, choices=["residual","inplace"], default="residual")
 
     # Paths
