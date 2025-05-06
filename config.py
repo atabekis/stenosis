@@ -6,7 +6,6 @@ from util import get_optimal_workers
 
 # ------------ RANDOM SEED -------------- #
 SEED = 5
-# pl.seed_everything(SEED); random.seed(SEED); np.random.seed(SEED); torch.manual_seed(SEED)
 
 # --------------- PATHS ----------------- #
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -16,16 +15,16 @@ DANILOV_DATASET_DIR = PROJECT_ROOT / "data/DANILOV"
 DANILOV_DATASET_PATH = DANILOV_DATASET_DIR / "dataset"
 
 LOGS_DIR = PROJECT_ROOT / "logs"
-MODEL_CHECKPOINTS_DIR = PROJECT_ROOT / "model_checkpoints"
 
 # ------------- CONTROLS --------------- #
 
 DEFAULT_WIDTH, DEFAULT_HEIGHT = 512, 512  # pixels
 
 # -- !Important
-#  T_CLIP is used to clip the length of a video sequence to T_CLIP frames, this is applied universally
-#  If there exists videos where frame_count < T_CLIP, those videos will be discarded!
-T_CLIP = 8
+#  T_CLIP is used to set the length of a video sequence to T_CLIP frames, this is applied universally
+#  if a video has > T_CLIP frames, T_CLIP of them used. If a video has < T_CLIP, then the video is
+#  padded till it reaches T_CLIP frames
+T_CLIP = 24
 
 TRAIN_SIZE = 0.7
 VAL_SIZE = 0.2
@@ -36,13 +35,13 @@ CLASSES = ['__background__', 'stenosis']  # binary task 1: stenosis, 0: backgrou
 NUM_CLASSES = len(CLASSES)
 
 DEBUG = False
-DEBUG_SIZE = 0.25  # keep % (DEBUG_SIZE * 100) of data
+DEBUG_SIZE = 0.01  # keep % (DEBUG_SIZE * 100) of data
 
 NUM_WORKERS = get_optimal_workers() if not DEBUG else 4
 
 
 # -------------- MODEL-SPECIFIC CONTROLS ---------- #
-FOCAL_LOSS_ALPHA = 0.25
+FOCAL_LOSS_ALPHA = 0.75
 FOCAL_LOSS_GAMMA = 2.0
 GIOU_LOSS_COEF = 2.0
 L1_LOSS_COEF = 5.0
