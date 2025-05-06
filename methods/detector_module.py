@@ -1,5 +1,11 @@
 # detector_module.py
 
+# Python imports
+import os
+import math
+import numpy as np
+from typing import Optional, Union, Any
+
 # Torch imports
 import torch
 import torch.nn as nn
@@ -12,12 +18,7 @@ from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
 # Image logging in TensorBoard
 from torchvision.utils import draw_bounding_boxes
 from torch.utils.tensorboard import SummaryWriter
-
-# Python imports
-import os
-import math
-import numpy as np
-from typing import Optional, Union, Any
+from pytorch_lightning.loggers import TensorBoardLogger
 
 # Local imports
 from util import log
@@ -34,7 +35,7 @@ from config import (
 # tensorboard logging
 PRED_COLOR = "blue"
 GT_COLOR = "green"
-LOG_SCORE_THRESHOLD = 0.15 # For the TensorBoard logger, boxes with confidence score > will be put on the image
+LOG_SCORE_THRESHOLD = 0.0 # For the TensorBoard logger, boxes with confidence score > will be put on the image
 
 
 class DetectionLightningModule(pl.LightningModule):
@@ -68,6 +69,9 @@ class DetectionLightningModule(pl.LightningModule):
             normalize_params: Optional[dict] = None,
             num_log_val_images: int = 1,  # how many images will be shown in the board (per epoch)
             num_log_test_images: Union[int, str] = 'all',
+
+            # hparam logging/tuning
+            hparams_to_log: Optional[dict] = None,
     ):
         super().__init__()
         self.model = model
@@ -90,9 +94,9 @@ class DetectionLightningModule(pl.LightningModule):
         if model_stage not in [1, 2, 3]:
             raise ValueError(f'Invalid model_stage: {model_stage}. Must be in [1, 2, 3]')
 
-        # self.process_as_sequence = self.model_stage in [2, 3]
+        self._hparams_to_log = hparams_to_log or {}
+        self.save_hyperparameters(ignore=['model', 'normalize_params', 'hparams_to_log'])
 
-        self.save_hyperparameters(ignore=['model'])
 
         # ------ initialize metrics -------
         common_map_args = {
@@ -104,8 +108,8 @@ class DetectionLightningModule(pl.LightningModule):
         self.val_map = MeanAveragePrecision(**common_map_args)
         self.test_map = MeanAveragePrecision(**common_map_args)
 
-        self.val_preds, self.val_targets = [], []
-        self.test_preds, self.test_targets = [], []
+        self.val_preds_cpu, self.val_targets_cpu = [], []
+        self.test_preds_cpu, self.test_targets_cpu = [], []
 
 
         # ----- redundancy, input validation ------
@@ -122,10 +126,14 @@ class DetectionLightningModule(pl.LightningModule):
         self.val_image_samples = []
         self.val_pred_samples = []   # stores list[dict] or list[list[dict]]
         self.val_target_samples = []
+        self.val_mask_samples = []
 
         self.test_image_samples = []
         self.test_pred_samples = []
         self.test_target_samples = []
+        self.test_mask_samples = []
+
+        self.final_test_metrics = {}
 
         if not (isinstance(self.num_log_test_images, int) and self.num_log_test_images >= 0) and self.num_log_test_images != 'all':
             raise ValueError(f'num_log_test_images must be an integer >= 0 or "all", got {self.num_log_test_images}')
@@ -142,7 +150,9 @@ class DetectionLightningModule(pl.LightningModule):
     def forward(
             self,
             images: Union[list[torch.Tensor], torch.Tensor],
-            targets: Optional[Union[list[dict[str, torch.Tensor]], list[list[dict[str, torch.Tensor]]]]] = None) -> Any:
+            targets: Optional[Union[list[dict[str, torch.Tensor]], list[list[dict[str, torch.Tensor]]]]] = None,
+            masks: Optional[torch.Tensor] = None,  # might be deprecated, will see with transformer
+    ) -> Any:
         """
         Forward pass of the model. Input format depends on the model stage
         :param images: input images
@@ -155,202 +165,219 @@ class DetectionLightningModule(pl.LightningModule):
             Stage 1: expected list[list[dict{boxes, scores, labels}]]
             Stage 2/3: expected list[list[dict{boxes, scores, labels}]], per-frame predictions.
         """
+
         return self.model(images, targets)
 
 
-    def _validate_input_shape(self, images: Union[list[torch.Tensor], torch.Tensor], stage: str) -> None:
+    def _validate_input_shape(self, images: Union[list[torch.Tensor], torch.Tensor], masks: torch.Tensor) -> None:
         """Checks input shape at initialization per stage (train/val/test)."""
-        is_correct_shape = True
-        err_msg = ""
-
         if self.model_stage == 1:
             if isinstance(images, list):
-                if not images or not (isinstance(images[0], torch.Tensor) and images[0].ndim == 3):
-                    is_correct_shape = False
-                    err_msg = (f"Stage 1 expected a list[tensor[c, h, w]], but got a list containing type {type(images[0])}"
-                               f" with ndim {images[0].ndim if hasattr(images[0], 'ndim') else 'N/A'}.")
-
-            elif isinstance(images, torch.Tensor):
-                if images.ndim != 4:
-                    is_correct_shape = False
-                    err_msg = f"Stage 1 expected tensor [b, c, h, w] or list[tensor[c, h, w]], but got tensor with ndim {images.ndim}"
-
+                assert images and torch.is_tensor(images[0]) and images[0].dim() == 3, (
+                    f"Stage 1 expected list of [C,H,W] tensors, got {type(images[0])} with ndim "
+                    f"{getattr(images[0], 'dim', lambda: None)()}"
+                )
+            elif torch.is_tensor(images):
+                assert images.dim() == 4, f"Stage 1 expected Tensor[B,C,H,W], got ndim={images.dim()}"
             else:
-                is_correct_shape = False
-                err_msg = f"Stage 1 received unexpected input type {type(images)}"
+                raise AssertionError(f"Stage 1 unexpected images type: {type(images)}")
+            return
 
         elif self.model_stage in [2, 3]:
-            if not (isinstance(images, torch.Tensor) and images.ndim == 5):
-                is_correct_shape = False
-                image_info = f"type {type(images)}"
-                if hasattr(images, 'ndim'): image_info += f" with ndim {images.ndim}"
-                elif isinstance(images, list): image_info += f" (List of len {len(images)})"
-                err_msg = f"Stage {self.model_stage} expected Tensor[B,T,C,H,W], but got {image_info}."
+            assert torch.is_tensor(images) and images.dim() == 5, (
+                f"Stage {self.model_stage} expected Tensor[B,T,C,H,W], got {type(images)} ndim="
+                f"{getattr(images, 'dim', lambda: None)()}"
+            )
+            batch, t = images.size(0), images.size(1)
 
-        if not is_correct_shape:
-            log(f"Input shape validation FAILED during stage {stage}: {err_msg}")
+            assert masks is not None, "Mask is required for Stage 2/3 but was None"
+            assert torch.is_tensor(masks) and masks.dim() == 2, (
+                f"Stage {self.model_stage} expected mask Tensor[B,T], got {type(masks)} ndim="
+                f"{getattr(masks, 'dim', lambda: None)()}"
+            )
+            assert masks.size(0) == batch and masks.size(1) == t, (
+                f"Mask shape {tuple(masks.shape)} does not match images shape [B={batch},T={t}]"
+            )
+            return
 
 
     def _step_logic(self, batch, batch_idx, step_type):
-        images, targets, _ = batch
+        images, targets, masks, metadata = batch
+        batch_size = len(images)
 
-        # --- 1. Input‐shape validation (once per phase) ---
+        is_val = (step_type == 'val')
+
+        if self.model_stage == 1:
+            images = images.squeeze(1)
+            targets = [t[0] for t in targets if t]
+
+        # --- 1. input shape validation (once) ---
         if step_type == 'train' and not self._train_input_validated:
-            self._validate_input_shape(images, 'train')
+            self._validate_input_shape(images, masks=masks)
             self._train_input_validated = True
         elif step_type == 'val' and not self._val_input_validated:
             if not self.trainer.sanity_checking:
-                self._validate_input_shape(images, 'val')
+                self._validate_input_shape(images, masks=masks)
             self._val_input_validated = True
         elif step_type == 'test' and not self._test_input_validated:
-            self._validate_input_shape(images, 'test')
+            self._validate_input_shape(images, masks=masks)
             self._test_input_validated = True
 
-        # --- 2. Training step is elsewhere ---
+        # 2. Training step refactored to training_step()
         if step_type == 'train':
             return
 
-        # --- 3. Shared val/test logic ---
-        is_val = (step_type == 'val')
-        # choose the right trackers
-        preds_flat_storage = self.val_preds if is_val else self.test_preds
-        tgts_flat_storage = self.val_targets if is_val else self.test_targets
-        metric = self.val_map if is_val else self.test_map
-
-        # trackers for non-flat samples for tensorboard logging
-        samples_imgs_storage = self.val_image_samples if is_val else self.test_image_samples
-        samples_preds_storage = self.val_pred_samples if is_val else self.test_pred_samples
-        samples_targets_storage = self.val_target_samples if is_val else self.test_target_samples
-        max_log = self.num_log_val_images if is_val else self.num_log_test_images
-
+        # 3. forward pass (for val & test)
         with torch.no_grad():
-            preds = self.model(images)
+            preds = self.forward(images, targets=None, masks=masks)
 
-        metric_preds_flat, metric_targets_flat = [], []
-        log_images_list, log_preds_list, log_targets_list = [], [], []
+        # 4. flatten preds/targets according to mask
+        flat_mask = masks.view(-1)
+        metric_preds, metric_tgts = [], []
 
         if self.model_stage == 1:
-            metric_preds_flat, metric_targets_flat = preds, targets
+            # preds, targets are length-B lists
+            for i, p in enumerate(preds):
+                if i < flat_mask.size(0) and flat_mask[i]:
+                    metric_preds.append(p)
+                    metric_tgts.append(targets[i])
 
-            if isinstance(images, torch.Tensor): log_images_list = list(images)
-            else: log_images_list = images
+        else:
+            # preds, targets are lists of lists [B, T]
+            flat_tgts = [frame_tgt for video_tgts in targets for frame_tgt in video_tgts]
 
-            log_preds_list, log_targets_list = preds, targets
+            if len(preds) != flat_mask.size(0) or len(flat_tgts) != flat_mask.size(0):
+                log(f'WARNING: Shape mismatch in _step_logic. Preds len: {len(preds)}, Flat Tgts len: {len(flat_tgts)}, Flat Mask len: {flat_mask.size(0)}. Skipping batch for metrics.')
+                return
 
+            for i, keep_frame in enumerate(flat_mask):
+                if keep_frame:
+                    metric_preds.append(preds[i])
+                    metric_tgts.append(flat_tgts[i])
 
-        else:  # stage 2/3: preds=list[list[dict]], targets=list[list[dict]], images=T(B, T, C, H, W)
-            for clip_preds in preds:
-                metric_preds_flat.extend(clip_preds)
-            for clip_targets in targets:
-                metric_targets_flat.extend(clip_targets)
+        # 5. update metrics
+        metric = self.val_map if is_val else self.test_map
+        if metric_preds and metric_tgts:
+            dev = metric.device
+            preds_dev = [{k: v.to(dev) for k, v in p.items()} for p in metric_preds]
+            tgts_dev = [{k: v.to(dev) for k, v in t.items()} for t in metric_tgts]
+            metric.update(preds_dev, tgts_dev)
 
-            log_images_list, log_preds_list, log_targets_list = list(images), preds, targets
+        # 6. store cpu copies for logging/metrics
+        pred_store = self.val_preds_cpu if is_val else self.test_preds_cpu
+        tgt_store = self.val_targets_cpu if is_val else self.test_targets_cpu
 
-        try:
-            metric.update(metric_preds_flat, metric_targets_flat)
-        except Exception as e:
-            log(f'Error updating {step_type} metric: {e}. Check pred/target format.')
+        pred_store.extend([{k: v.cpu().detach() for k, v in p.items()} for p in metric_preds])
+        tgt_store.extend([{k: v.cpu().detach() for k, v in t.items()} for t in metric_tgts])
 
+        # 7. store samples for logging
+        img_store = self.val_image_samples if is_val else self.test_image_samples
+        pred_s_store = self.val_pred_samples if is_val else self.test_pred_samples
+        tgt_s_store = self.val_target_samples if is_val else self.test_target_samples
+        mask_s_store = self.val_mask_samples if is_val else self.test_mask_samples
+        max_log = self.num_log_val_images if is_val else self.num_log_test_images
 
-        # pass onto the cpu for metric calculation and log
-        cpu_preds_flat = [{k: v.cpu().detach() for k, v in p.items()} for p in metric_preds_flat]
-        cpu_tgts_flat = [{k: v.cpu().detach() for k, v in t.items()} for t in metric_targets_flat]
-        preds_flat_storage.extend(cpu_preds_flat)
-        tgts_flat_storage.extend(cpu_tgts_flat)
-
-        # 4. collect samples for tensorboard
         should_log = (
-                (is_val and not self.trainer.sanity_checking and max_log > 0) or
-                (not is_val and max_log not in (0, None))
+                (is_val and not self.trainer.sanity_checking and max_log > 0)
+                or (not is_val and max_log != 0)
         )
-        num_currently_stored = len(samples_imgs_storage)
-        max_to_store = float('inf') if max_log == 'all' else max_log
+        stored = len(img_store)
+        limit = float('inf') if (not is_val and max_log == 'all') else max_log
 
-        if should_log and num_currently_stored < max_to_store:
-            num_items_in_batch = len(log_images_list)
-            to_take = min(max_to_store - num_currently_stored, num_items_in_batch)
+        if should_log and stored < limit:
+            for i in range(int(min((limit - stored), batch_size))):
+                img_store.append(images[i].cpu().detach())
 
-            for i in range(to_take):
-                samples_imgs_storage.append(log_images_list[i].cpu().detach())
-                samples_preds_storage.append([{k: v.cpu().detach() for k, v in p.items()} for p in
-                                              log_preds_list[i]] if self.model_stage != 1
-                                             else {k: v.cpu().detach() for k, v in log_preds_list[i].items()})
-
-                samples_targets_storage.append([{k: v.cpu().detach() for k, v in p.items()} for p in
-                                                log_targets_list[i]] if self.model_stage != 1
-                                               else {k: v.cpu().detach() for k, v in log_targets_list[i].items()})
-
-        # 5. validation loss logging
-        if is_val:
-            orig_mode = self.model.training
-            self.model.train()
-            with torch.no_grad():
-                # targets need to be on device for loss calc
                 if self.model_stage == 1:
-                    loss_targets = [{k: v.to(self.device) for k, v in t.items()} for t in targets]
-                    loss_images = [img.to(self.device) for img in images] if isinstance(images, list) else images.to(self.device)
-                else: # Stage 2/3
-                    loss_targets = [[{k: v.to(self.device) for k, v in frame.items()} for frame in clip] for clip in targets]
-                    loss_images = images.to(self.device)
+                    pred_s_store.append({k: v.cpu().detach() for k, v in preds[i].items()})
+                    tgt_s_store.append({k: v.cpu().detach() for k, v in targets[i].items()})
 
-                loss_dict = self.forward(loss_images, loss_targets)
+                else:
+                    video_preds_for_log = []
+                    current_pred_idx = 0
+                    for b_idx in range(batch_size):
+                        frames_in_this_video = images.size(1)
+                        video_pred_sequence = []
+                        for t_idx in range(frames_in_this_video):
+                            if current_pred_idx < len(preds):
+                                video_pred_sequence.append({k: v.cpu().detach() for k, v in preds[current_pred_idx].items()})
+                            else:
+                                video_pred_sequence.append({'boxes': torch.empty(0,4), 'scores':torch.empty(0), 'labels':torch.empty(0, dtype=torch.long)})
 
-            self.model.train(orig_mode)
+                            current_pred_idx += 1
+                        video_preds_for_log.append(video_pred_sequence)
 
-            # sum losses
-            losses = [l for l in loss_dict.values() if isinstance(l, torch.Tensor)]
-            total_loss = sum(losses) if losses else torch.tensor(0., device=self.device)
+                    pred_s_store.append(video_preds_for_log[i])
+                    tgt_s_store.append([{k: v.cpu().detach() for k, v in frame_target.items()} for frame_target in targets[i]])
 
-            # log validation losses
-            log_args = dict(
-                on_step=False, on_epoch=True, prog_bar=False,
-                logger=True, sync_dist=True,
-                batch_size=images.size(0) if isinstance(images, torch.Tensor) else len(images)
-            )
-            for name, value in loss_dict.items():
-                if isinstance(value, torch.Tensor):
-                    self.log(f'val/{name}', value, **log_args)
-            self.log('val_loss', total_loss, **log_args) # Show total loss on progress bar
+                mask_s_store.append(masks[i].cpu().detach())
 
+        # 7. val loss logging
+        if is_val:
+            orig_training_state = self.model.training
+            self.model.train()
+
+            with torch.no_grad():
+                loss_dict = self.forward(images, targets=targets)
+
+            self.model.train(orig_training_state)
+
+            valid_losses = [v for v in loss_dict.values() if isinstance(v, torch.Tensor) and not torch.isnan(v) and not torch.isinf(v)]
+            total_loss = sum(valid_losses) if valid_losses else torch.tensor(0.0, device=self.device)
+
+            self.log('val_loss', total_loss,
+                     on_step=False, on_epoch=True, prog_bar=True,
+                     logger=True, sync_dist=True, batch_size=batch_size)
+
+            for name, val in loss_dict.items():
+                if isinstance(val, torch.Tensor) and not torch.isnan(val) and not torch.isinf(val):
+                    self.log(f'val/{name}', val,
+                             on_step=False, on_epoch=True, prog_bar=False,
+                             logger=True, sync_dist=True, batch_size=batch_size)
 
 
     def training_step(self, batch, batch_idx):
         """The training step needs to explicitly return the losses for logging"""
-        images, targets, _ = batch # Unpack batch
-        if targets is None: raise ValueError("Targets must be provided during training")
+        images, targets, masks, _ = batch
+        assert targets is not None, "Targets must be provided during training"
 
-        loss_dict = self.forward(images, targets)
+        # 1. forward to get losses
+        if self.model_stage == 1:
+            images = images.squeeze(1) # [B, C, H, W]
+            targets = [t[0] for t in targets if t] # list[dict]
 
-        # loss processing and logging
-        if not isinstance(loss_dict, dict) or not loss_dict:
-            log(f"Epoch {self.current_epoch}, Step {self.global_step}: Invalid or empty loss dictionary returned by model: {loss_dict}")
-            total_loss = torch.tensor(0.0, device=self.device, requires_grad=True)
-            loss_dict = {} # ensure loop below doesn't fail
+        loss_dict = self.forward(images, targets=targets)
+
+        # 2. sum tensor losses that require grad
+        if isinstance(loss_dict, dict):
+            valid = [l for l in loss_dict.values() if torch.is_tensor(l) and l.requires_grad and not torch.isnan(l) and not torch.isinf(l)]
+            total_loss = sum(valid) if valid else torch.tensor(0.0, device=self.device, requires_grad=True)
         else:
-            valid_losses = [loss for loss in loss_dict.values() if isinstance(loss, torch.Tensor) and loss.requires_grad]
-            if not valid_losses:
-                log(f"Epoch {self.current_epoch}, Step {self.global_step}: No tensor losses found in loss dictionary: {loss_dict}")
-                total_loss = torch.tensor(0.0, device=self.device, requires_grad=True)
-            else:
-                total_loss = sum(valid_losses)
+            total_loss = torch.tensor(0.0, device=self.device, requires_grad=True)
+            loss_dict = {}
 
-        # log individual losses and total loss
-        batch_size = images.size(0) if isinstance(images, torch.Tensor) else len(images)
-        log_kwargs = {'on_step': True, 'on_epoch': True, 'prog_bar': True, 'logger': True, 'sync_dist': True, 'batch_size': batch_size}
+        # 3. logging
+        batch_size = images.size(0) if torch.is_tensor(images) else len(images)
+        self.log(
+            'train_loss', total_loss,
+            on_step=True, on_epoch=True, prog_bar=True,
+            logger=True, sync_dist=True, batch_size=batch_size
+        )
+        # 3a. individual losses
+        for name, loss in loss_dict.items():
+            if torch.is_tensor(loss):
+                self.log(
+                    f'train/{name}', loss,
+                    on_step=True, on_epoch=True, prog_bar=False,
+                    logger=True, sync_dist=True, batch_size=batch_size
+                )
 
-        for k, v in loss_dict.items():
-            if isinstance(v, torch.Tensor):
-                self.log(f'train/{k}', v.detach(), **log_kwargs)
-
-        self.log(f'train_loss', total_loss.detach(), **log_kwargs)
-
-        # log lr
+        # 3b. learning rate
         scheduler = self.lr_schedulers()
         current_lr = 0.0
         if scheduler:
-            current_lr = scheduler.get_last_lr()[0] # For single schedulers
-
-        self.log('train/lr', current_lr, on_step=True, on_epoch=False, prog_bar=False, logger=True, batch_size=batch_size)
+            current_lr = scheduler.get_last_lr()[0]
+        self.log('train/lr', current_lr, on_step=True, on_epoch=False, logger=True, batch_size=batch_size)
 
         return total_loss
 
@@ -365,17 +392,19 @@ class DetectionLightningModule(pl.LightningModule):
         return 0
 
 
-    def _calc_metrics(self, stage: str) -> None:
+    def _calc_metrics(self, stage: str) -> dict[Any, Any]:
         """
         Compute, log, and reset metrics for either 'val' or 'test' stage.
         """
         map_obj = getattr(self, f"{stage}_map")
-        preds_attr = getattr(self, f"{stage}_preds")
-        targs_attr = getattr(self, f"{stage}_targets")
+        preds_attr = getattr(self, f"{stage}_preds_cpu")
+        targs_attr = getattr(self, f"{stage}_targets_cpu")
         prefix = f"{stage}/"
         # prog_bar + sync_dist only for validation
         prog_bar = stage == "val"
         sync_dist = stage == "val"
+
+        metrics_dict = {}
 
         if not preds_attr or not targs_attr:
             log(f"Skipping {stage} metrics calculation: No predictions or targets collected.")
@@ -385,7 +414,7 @@ class DetectionLightningModule(pl.LightningModule):
                       "Precision_0.5", "Recall_0.5", "F1_0.5", "AvgIoU_TP_0.5"]}
             self.log_dict(zeros, logger=True, batch_size=1, sync_dist=sync_dist)
             map_obj.reset(); preds_attr.clear(); targs_attr.clear()
-            return
+            return zeros
 
         try:
             # compute mAP/mAR
@@ -395,19 +424,21 @@ class DetectionLightningModule(pl.LightningModule):
             m_all = to_num(metrics["map"])
             mar100 = to_num(metrics["mar_100"])
 
-            self.log_dict(
-                {f"{prefix}mAP_0.5": m50,
+            map_metrics = {
+                 f"{prefix}mAP_0.5": m50,
                  f"{prefix}mAP": m_all,
-                 f"{prefix}mAR_100": mar100},
-                prog_bar=prog_bar, logger=True, sync_dist=sync_dist, batch_size=1
-            )
+                 f"{prefix}mAR_100": mar100
+            }
+
+            self.log_dict(map_metrics, prog_bar=prog_bar, logger=True, sync_dist=sync_dist, batch_size=1)
+            metrics_dict.update(map_metrics)
 
             # move preds/targets to CPU once
             cpu_preds = [{k: v.cpu() for k, v in p.items()} for p in preds_attr]
             cpu_targs = [{k: v.cpu() for k, v in t.items()} for t in targs_attr]
 
             ap_small = self.compute_ap_for_area(cpu_preds, cpu_targs, max_area=32**2)
-            precision, recall, f1, avg_iou_tp = self.compute_prf1(cpu_preds, cpu_targs, iou_threshold=0.5)
+            precision, recall, f1, avg_iou_tp = self.compute_prf1(cpu_preds, cpu_targs, iou_threshold=0.1)  # TODO: SET BACK TO 0.5
 
             # log the rest
             extra = {
@@ -417,9 +448,8 @@ class DetectionLightningModule(pl.LightningModule):
                 f"{prefix}Recall_0.5": recall,
                 f"{prefix}F1_0.5": f1,
             }
-            for name, val in extra.items():
-                prog_bar_extra = prog_bar and name.endswith(("F1_0.5", "AvgIoU_TP_0.5"))
-                self.log(name, val, prog_bar=prog_bar_extra ,logger=True, sync_dist=sync_dist)
+            self.log_dict(extra, logger=True, sync_dist=sync_dist, batch_size=1)
+            metrics_dict.update(extra)
 
         except Exception as e:
             log(f"Error computing {stage} metrics: {e}")
@@ -427,11 +457,14 @@ class DetectionLightningModule(pl.LightningModule):
                      ["mAP_0.5", "mAP", "mAR_100", "AP_small",
                       "Precision_0.5", "Recall_0.5", "F1_0.5", "AvgIoU_TP_0.5"]}
             self.log_dict(zeros, logger=True, batch_size=1)
+            metrics_dict.update(zeros)
 
         finally:
             map_obj.reset()
             preds_attr.clear()
             targs_attr.clear()
+
+        return metrics_dict
 
 
     def on_train_start(self) -> None:
@@ -442,20 +475,25 @@ class DetectionLightningModule(pl.LightningModule):
         if not self.trainer.sanity_checking:
             self._val_input_validated = False
 
-            self.val_preds.clear()
-            self.val_targets.clear()
+            self.val_preds_cpu.clear()
+            self.val_targets_cpu.clear()
             self.val_image_samples.clear()
             self.val_pred_samples.clear()
             self.val_target_samples.clear()
+            self.val_mask_samples.clear()
+
+            self.val_map.reset()
 
 
     def on_test_start(self) -> None:
-        self._test_input_validated = False
-        self.test_preds.clear()
-        self.test_targets.clear()
+        self.test_preds_cpu.clear()
+        self.test_targets_cpu.clear()
         self.test_image_samples.clear()
         self.test_pred_samples.clear()
         self.test_target_samples.clear()
+        self.test_mask_samples.clear()
+
+        self.test_map.reset()
 
 
     def on_validation_epoch_end(self) -> None:
@@ -477,6 +515,7 @@ class DetectionLightningModule(pl.LightningModule):
                 image_samples=self.val_image_samples,
                 pred_samples=self.val_pred_samples,
                 target_samples=self.val_target_samples,
+                mask_samples=self.val_mask_samples,
                 writer=self.logger.experiment,
                 tag='Validation Image Samples',
                 global_step=self.current_epoch
@@ -485,33 +524,53 @@ class DetectionLightningModule(pl.LightningModule):
         self.val_image_samples.clear()
         self.val_pred_samples.clear()
         self.val_target_samples.clear()
+        self.val_mask_samples.clear()
 
 
     def on_test_epoch_end(self) -> None:
         if self.trainer.is_global_zero:
-            self._calc_metrics('test')
+            final_metrics = self._calc_metrics('test')
+            self.final_test_metrics = final_metrics
 
-        should_log_images = (  #check for test images as well
-                hasattr(self, 'logger') and
-                self.logger is not None and
-                isinstance(self.logger.experiment, SummaryWriter) and
-                self.num_log_test_images != 0 and
-                self.trainer.is_global_zero
-        )
+            logger = self.logger
+            if isinstance(logger, TensorBoardLogger):
+                ckpt = self.trainer.checkpoint_callback
+                best_score = getattr(ckpt, 'best_model_score', None)
+                monitor = getattr(ckpt, 'monitor', 'val_metric').replace('/', '_')
 
-        if should_log_images and self.test_image_samples:
-            self._log_image_samples_to_tensorboard(
-                image_samples=self.test_image_samples,
-                pred_samples=self.test_pred_samples,
-                target_samples=self.test_target_samples,
-                writer=self.logger.experiment,
-                tag='Testing Image Samples',
-                global_step=self.current_epoch
-            )
+                # prepare HParam metrics
+                hp_metrics = {}
+                if best_score is not None:
+                    hp_metrics[f"hp/best_{monitor}"] = best_score.item()
+                hp_metrics.update({
+                    f"hp/{k.replace('/', '_')}": (v.item() if torch.is_tensor(v) else v)
+                    for k, v in final_metrics.items()
+                    if isinstance(v, (int, float, torch.Tensor))
+                })
+                if not hp_metrics:
+                    hp_metrics = {"hp/metric_collection_failed": 1.0}
 
+                # log in one shot
+                params = getattr(self, '_hparams_to_log', {})
+                logger.log_hyperparams(params, hp_metrics)
+                logger.save()
+
+            if self.num_log_test_images and getattr(logger, 'experiment', None):
+                 self._log_image_samples_to_tensorboard(
+                    image_samples=self.test_image_samples,
+                    pred_samples=self.test_pred_samples,
+                    target_samples=self.test_target_samples,
+                    mask_samples=self.test_mask_samples,
+                    writer=logger.experiment,
+                    tag="Test Image Samples",
+                    global_step=self.current_epoch
+                )
+
+        # clear buffers
         self.test_image_samples.clear()
         self.test_pred_samples.clear()
         self.test_target_samples.clear()
+        self.test_mask_samples.clear()
 
 
     def configure_optimizers(self):
@@ -536,7 +595,6 @@ class DetectionLightningModule(pl.LightningModule):
         )
 
         # ---- scheduler calculation -----
-        total_training_steps = 0
         warmup_steps = self.warmup_steps
 
         try:
@@ -563,7 +621,7 @@ class DetectionLightningModule(pl.LightningModule):
 
         if total_training_steps <= warmup_steps:
             log(f"Warning: Total steps ({total_training_steps}) <= warmup steps ({warmup_steps})."
-                f"Scheduler might not behave as expected. Check max_epochs, dataset size, batch size, accumulation")
+                f" Scheduler might not behave as expected. Check max_epochs, dataset size, batch size, accumulation")
             cosine_steps = 1
         else:
             cosine_steps = total_training_steps - warmup_steps
@@ -809,6 +867,7 @@ class DetectionLightningModule(pl.LightningModule):
             image_samples: list[Union[torch.Tensor, list[torch.Tensor]]],
             pred_samples: list[dict[str, torch.Tensor]],
             target_samples: list[dict[str, torch.Tensor]],
+            mask_samples: list[torch.Tensor],
             writer: SummaryWriter,
             tag: str,
             global_step: int
@@ -818,92 +877,65 @@ class DetectionLightningModule(pl.LightningModule):
             return
 
         to_log = []
-        num_logged = 0
+        for img, pred, tgt_list, mask in zip(image_samples, pred_samples, target_samples, mask_samples):
 
-        for i in range(len(image_samples)):
-            img_sample = image_samples[i]  # T(C,H,W) or T(T,C,H,W)
-            pred_sample = pred_samples[i]  # dict or list[dict]
-            target_sample = target_samples[i]  # dict or list[dict]
+            # select one real frame
+            if self.model_stage == 1:
+                if not mask[0]:
+                    continue
+                frame = img
+                pred_frame = pred
+                tgt_frame = tgt_list
+            else:
+                real_idxs = mask.nonzero(as_tuple=True)[0]
+                if not real_idxs.numel():
+                    continue
+                idx = real_idxs[real_idxs.numel() // 2].item()
+                frame = img[idx]
+                pred_frame = pred[idx] if isinstance(pred, list) and len(pred) > idx else None
+                tgt_frame = tgt_list[idx] if len(tgt_list) > idx else None
 
-            pred_frame = None
-            target_frame = None
-
-            # 1. pick a single frame (C,H,W) tensor and its pred/target
-            if not isinstance(img_sample, torch.Tensor): continue
-
-            if img_sample.dim() == 3:  # Stage 1: single frame T(C,H,W)
-                img_frame = img_sample
-                if isinstance(pred_sample, dict): pred_frame = pred_sample
-                if isinstance(target_sample, dict): target_frame = target_sample
-
-            elif img_sample.dim() == 4:  # Stage 2/3: Clip T(T,C,H,W)
-                t = img_sample.shape[0] // 2  # pick middle frame index
-                img_frame = img_sample[t]
-                if isinstance(pred_sample, list) and len(pred_sample) > t: pred_frame = pred_sample[t]
-                if isinstance(target_sample, list) and len(target_sample) > t: target_frame = target_sample[t]
-
-            else:  # unexpected dimension
+            if frame is None or pred_frame is None or tgt_frame is None:
                 continue
 
-            # ensure valid data for the chosen frame
-            if img_frame is None or pred_frame is None or target_frame is None: continue
-
-            # 2. denorm & convert to uint8 [3, H, W]
-            img_cpu = img_frame.cpu()
-            img_denorm = self._denormalize_image(img_cpu).clamp(0, 1) * 255
-            img_uint8 = img_denorm.to(torch.uint8)
-            if img_uint8.shape[0] == 1:  # 3 channels for drawing
-                img_uint8 = img_uint8.repeat(3, 1, 1)
-            if img_uint8.shape[0] != 3:  # skip if failed
+            # denorm to uint8 3×H×W
+            img_dn = (self._denormalize_image(frame).clamp(0, 1) * 255).to(torch.uint8)
+            if img_dn.size(0) == 1:
+                img_dn = img_dn.repeat(3, 1, 1)
+            if img_dn.size(0) != 3:
                 continue
 
-            # 3. prepare preds (filter by score)
-            scores = pred_frame.get('scores', torch.tensor([])).cpu()
-            boxes = pred_frame.get('boxes', torch.zeros((0, 4))).cpu()
-            labels = pred_frame.get('labels', torch.tensor([], dtype=torch.int64)).cpu()
+            # gt boxes/text
+            gt_boxes = tgt_frame.get('boxes', torch.zeros((0, 4)))
+            gt_labels = tgt_frame.get('labels', torch.zeros(0, dtype=torch.int64)).tolist()
+            gt_texts = [f"GT:{CLASSES[l]}" for l in gt_labels if 0 <= l < len(CLASSES)]
 
-            mask = scores >= LOG_SCORE_THRESHOLD
-            boxes_p = boxes[mask]
-            labels_p = labels[mask].tolist()
-            scores_p = scores[mask].tolist()
-            pred_texts = [
-                f"{CLASSES[l]}:{s:.2f}"
-                for l, s in zip(labels_p, scores_p)
-                if 0 <= l < len(CLASSES)
-            ]
+            # pred boxes/text (single box only)
+            pboxes = pred_frame.get('boxes', torch.zeros((0, 4)))
+            pscores = pred_frame.get('scores', torch.zeros(0))
+            plabels = pred_frame.get('labels', torch.zeros(0, dtype=torch.int64))
+            if pboxes.numel() and pscores[0] >= LOG_SCORE_THRESHOLD:
+                pboxes = pboxes[:1]
+                pl = plabels[0].item()
+                pt = f"{CLASSES[pl]}:{pscores[0].item():.2f}"
+                pred_boxes = pboxes
+                pred_texts = [pt]
+            else:
+                pred_boxes = torch.zeros((0, 4))
+                pred_texts = []
 
-            # 4. prepare gt
-            boxes_gt = target_frame.get('boxes', torch.zeros((0, 4))).cpu()
-            labels_gt = target_frame.get('labels', torch.tensor([], dtype=torch.int64)).cpu().tolist()
-            gt_texts = [
-                f"GT:{CLASSES[l]}"
-                for l in labels_gt
-                if 0 <= l < len(CLASSES)
-            ]
+            # draw boxes
+            canvas = img_dn.clone()
+            if gt_boxes.numel():
+                canvas = draw_bounding_boxes(canvas, gt_boxes, labels=gt_texts, colors=GT_COLOR, width=2)
+            if pred_boxes.numel():
+                canvas = draw_bounding_boxes(canvas, pred_boxes, labels=pred_texts, colors=PRED_COLOR, width=2)
 
-            # 5. draw boxes
-            img_plot = img_uint8.clone()
-            if boxes_gt.shape[0] > 0 and boxes_gt.shape[0] == len(gt_texts):
-                try:
-                    img_plot = draw_bounding_boxes(img_plot, boxes_gt, labels=gt_texts, colors=GT_COLOR, width=2)
-                except Exception as draw_e:
-                    log(f"Error drawing GT boxes: {draw_e}", level='warning')
-            if boxes_p.shape[0] > 0 and boxes_p.shape[0] == len(pred_texts):
-                try:
-                    img_plot = draw_bounding_boxes(img_plot, boxes_p, labels=pred_texts, colors=PRED_COLOR, width=2)
-                except Exception as draw_e:
-                    log(f"Error drawing Pred boxes: {draw_e}", level='warning')
-
-            to_log.append(img_plot)
-            num_logged += 1
+            to_log.append(canvas)
 
         if to_log:
-            try:
-                batch = torch.stack(to_log, dim=0)
-                writer.add_images(tag, batch, global_step, dataformats='NCHW')
-                log(f"Logged {len(to_log)} image samples to TensorBoard tag '{tag}' at step {global_step}.", verbose=False)
-            except Exception as e:
-                log(f"Error stacking or logging images to TensorBoard: {e}", level='error')
+            batch = torch.stack(to_log, dim=0)  # (N, 3, H, W)
+            writer.add_images(tag, batch, global_step, dataformats='NCHW')
 
 
     def _slrum_print_metrics(self):
