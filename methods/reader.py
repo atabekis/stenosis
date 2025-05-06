@@ -26,9 +26,8 @@ class Reader:
     """
     Reads the dataset directory, finds all .bmp + .xml pairs, and constructs XCAImage objects
     """
-    def __init__(self, dataset_dir, debug=DEBUG, t_clip=T_CLIP) -> None:
+    def __init__(self, dataset_dir, debug=DEBUG) -> None:
         self.dataset_dir = dataset_dir
-        self.t_clip = t_clip
 
         self.xca_images = []
 
@@ -274,12 +273,7 @@ class Reader:
         with concurrent.futures.ThreadPoolExecutor() as executor:
             videos = list(executor.map(process_video, videos_dict.items()))
 
-        all_videos = sorted(videos, key=lambda v: (v.patient_id, v.video_id))
-
-        # finally, only get videos that are >= T_CLIP
-        filtered = [v for v in all_videos if v.frame_count >= self.t_clip]
-        log(f"t_clip={self.t_clip!r}: kept {len(filtered)} videos, dropped {len(all_videos) - len(filtered)}")
-        return filtered
+        return sorted(videos, key=lambda v: (v.patient_id, v.video_id))
 
 
     def __repr__(self):

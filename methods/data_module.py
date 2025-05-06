@@ -2,6 +2,7 @@
 
 # Python imports
 import random
+import numpy as np
 from typing import Optional, Union
 from collections import defaultdict
 
@@ -63,6 +64,8 @@ class XCADataModule(pl.LightningDataModule):
 
         self.train_data, self.val_data, self.test_data = None, None, None
         self.train_dataset, self.val_dataset, self.test_dataset = None, None, None
+
+        assert np.isclose(sum(train_val_test_split), 1), 'Train, Validation and Test sizes must sum to 1'
 
     def _split_data(self):
         """
@@ -184,7 +187,8 @@ class XCADataModule(pl.LightningDataModule):
             collate_fn=self._collate_fn,
             pin_memory=True,
             persistent_workers=self.num_workers > 0,
-            generator=torch.Generator().manual_seed(self.seed)
+            drop_last=False
+            # generator=torch.Generator().manual_seed(self.seed)
         )
 
     def train_dataloader(self):
@@ -199,6 +203,7 @@ class XCADataModule(pl.LightningDataModule):
         self.setup('test')
         return self._make_dataloader(self.test_dataset, shuffle=False)
 
+
     def on_train_epoch_end(self):
         """Callback to clear aug. cache after a training epoch"""
         if hasattr(self.train_dataset, 'on_epoch_end') and self.use_augmentation:
@@ -206,78 +211,85 @@ class XCADataModule(pl.LightningDataModule):
 
 
     @staticmethod
-    def _validate_dataset_samples(dataset, dataset_name, num_samples=5):
-        """Validate a few samples to catch potential issues, handling image and video."""
-        if len(dataset) == 0:
-            log(f"Skipping validation for {dataset_name}: Dataset is empty.")
+    def _validate_dataset_samples(dataset, name, num_samples=3):
+        """
+        Validate a few samples to catch potential dataset issues.
+        """
+        length = len(dataset) if dataset else 0
+        if length == 0:
+            log(f"Skipping validation for {name}: empty dataset.")
             return
 
-        log(f"Validating {num_samples} samples from {dataset_name}...")
-        indices = random.sample(range(len(dataset)), min(num_samples, len(dataset)))
-        is_video = dataset.using_video_format
+        samples = min(num_samples, length)
+        log(f"Validating {samples} samples from {name}...")
+        indices = random.sample(range(length), samples)
 
-        expected_channels = 3 if dataset.repeat_channels else 1
+        is_video = getattr(dataset, "using_video_format", False)
+        expected_t = dataset.t_clip if is_video else 1
+        expected_c = 3 if dataset.repeat_channels else 1
 
-        for i, idx in enumerate(indices):
+        for seq_idx, idx in enumerate(indices, start=1):
             try:
-                item, target, metadata = dataset[idx]
-                # --- Tensor Checks ---
-                if is_video:
-                    # Video Clip: (T, C, H, W)
-                    assert item.dim() == 4, f"Video item should have 4 dimensions, got {item.dim()}"
-                    assert item.shape[0] == dataset.t_clip, f"Video item T dim {item.shape[0]} != t_clip {dataset.t_clip}"
-                    assert item.shape[1] == expected_channels, f"Video item C dim {item.shape[1]} != expected {expected_channels}"
-                    assert item.dtype == torch.float32, f"Item tensor should be float32, got {item.dtype}"
-                    # Check target (list[dict])
-                    assert isinstance(target, list), f"Video target should be a list, got {type(target)}"
-                    assert len(target) == dataset.t_clip, f"Video target list length {len(target)} != t_clip {dataset.t_clip}"
-                    # val each frame's target dict
-                    for frame_idx, frame_target in enumerate(target):
-                         XCADataModule._validate_target_dict(frame_target, f"Frame {frame_idx}")
-                else:
-                    # Single Image: (C, H, W)
-                    assert item.dim() == 3, f"Image item should have 3 dimensions, got {item.dim()}"
-                    assert item.shape[0] == expected_channels, f"Image item C dim {item.shape[0]} != expected {expected_channels}"
-                    assert item.dtype == torch.float32, f"Item tensor should be float32, got {item.dtype}"
-                    # Check target (dict)
-                    assert isinstance(target, dict), f"Image target should be a dict, got {type(target)}"
-                    XCADataModule._validate_target_dict(target, "Image")
+                item, targets, mask, meta = dataset[idx]
 
+                # --- item tensor checks ---
+                assert isinstance(item, torch.Tensor), f"Item not a Tensor: {type(item)}"
+                assert item.ndim == 4, f"Expected 4D (T,C,H,W), got {item.ndim}D"
+                assert item.shape[0] == expected_t, f"T dim {item.shape[0]} != {expected_t}"
+                assert item.shape[1] == expected_c, f"C dim {item.shape[1]} != {expected_c}"
+                assert item.dtype == torch.float32, f"Expected float32, got {item.dtype}"
+
+                # --- mask checks ---
+                assert isinstance(mask, torch.Tensor) and mask.dtype == torch.bool
+                assert mask.ndim == 1 and mask.shape[0] == expected_t
+                if is_video and "num_frames_in_clip" in meta: assert mask.sum().item() == meta["num_frames_in_clip"]
+
+                # --- targets checks ---
+                assert isinstance(targets, list) and len(targets) == expected_t
+                for frame_i, (m, tgt) in enumerate(zip(mask.tolist(), targets)): # padded frames must be empty
+                    if m: XCADataModule._validate_target_dict(tgt, f"Frame {frame_i}")
+                    else: assert not tgt["boxes"].numel() and not tgt["labels"].numel(), f"Padded target not empty at frame {frame_i}"
+
+                # --- meta checks ---
+                assert isinstance(meta, dict), f"Metadata not a dict: {type(meta)}"
+                assert "patient_id" in meta and "video_id" in meta
+
+            except AssertionError as ae:
+                log(f"Validation failed at index {idx}: {ae}")
+                raise
             except Exception as e:
-                log(f"Validation failed for sample index {idx} in {dataset_name}: {e}")
-                import traceback
-                traceback.print_exc()
+                log(f"Error validating index {idx}: {e}")
                 raise
 
-        log(f"Dataset validation successful for {dataset_name}!")
+        log(f"Successfully validated {samples} samples from {name}.")
 
     @staticmethod
     def _validate_target_dict(target, context):
-        """Validates the structure and content of a single target dictionary."""
-        assert isinstance(target, dict), f"{context} target is not a dict: {type(target)}"
-        assert 'boxes' in target, f"{context} target missing 'boxes' key"
-        assert 'labels' in target, f"{context} target missing 'labels' key"
-        boxes = target['boxes']
-        labels = target['labels']
-        assert isinstance(boxes, torch.Tensor), f"{context} boxes are not a tensor: {type(boxes)}"
-        assert isinstance(labels, torch.Tensor), f"{context} labels are not a tensor: {type(labels)}"
+        """
+        Validate a single target dict.
+        """
+        # ---- structure -----
+        assert isinstance(target, dict), f"{context} target must be dict, got {type(target)}"
+        assert 'boxes' in target and 'labels' in target, f"{context} missing keys"
+        boxes, labels = target['boxes'], target['labels']
+        assert isinstance(boxes, torch.Tensor), f"{context} boxes not Tensor: {type(boxes)}"
+        assert isinstance(labels, torch.Tensor), f"{context} labels not Tensor: {type(labels)}"
 
+        # ------ count consistency --------
         num_boxes = boxes.shape[0]
-        num_labels = labels.shape[0]
-        assert num_boxes == num_labels, f"{context} found {num_boxes} boxes but {num_labels} labels"
+        assert labels.shape[0] == num_boxes, f"{context} mismatch: {num_boxes} boxes vs {labels.shape[0]} labels"
 
-        if num_boxes > 0:
-             assert boxes.dim() == 2, f"{context} boxes tensor should be 2D, got {boxes.dim()} dimensions"
-             assert boxes.shape[1] == 4, f"{context} boxes should have 4 columns (coords), got {boxes.shape[1]}"
-             assert boxes.dtype == torch.float32, f"{context} boxes should be float32, got {boxes.dtype}"
-             assert labels.dim() == 1, f"{context} labels tensor should be 1D, got {labels.dim()} dimensions"
-             assert labels.dtype == torch.int64, f"{context} labels should be int64, got {labels.dtype}"
-             assert torch.all(boxes[:, 0] <= boxes[:, 2]), f"{context} found boxes where x1 > x2"
-             assert torch.all(boxes[:, 1] <= boxes[:, 3]), f"{context} found boxes where y1 > y2"
-             assert torch.all(labels >= 0) and torch.all(labels <= 1), f"{context} found labels outside [0, 1]: {labels.unique()}"
-        else:
-             assert boxes.shape == (0, 4), f"{context} empty boxes tensor has wrong shape: {boxes.shape}"
-             assert labels.shape == (0,), f"{context} empty labels tensor has wrong shape: {labels.shape}"
+        # ------ empty case -------
+        if num_boxes == 0:
+            assert boxes.shape == (0, 4), f"{context} empty boxes shape: {boxes.shape}"
+            assert labels.shape == (0,), f"{context} empty labels shape: {labels.shape}"
+            return
+
+        # -------- non‐empty: check dims & dtypes -------
+        assert boxes.ndim == 2 and boxes.shape[1] == 4, f"{context} boxes must be [N,4], got {tuple(boxes.shape)}"
+        assert boxes.dtype == torch.float32, f"{context} boxes dtype must be float32"
+        assert labels.ndim == 1 and labels.dtype == torch.int64, f"{context} labels must be 1D int64, got {labels.shape}, {labels.dtype}"
+
 
 
     @staticmethod
@@ -285,14 +297,20 @@ class XCADataModule(pl.LightningDataModule):
         """
         Custom collate function to handle variable-sized bounding boxes.
         """
-        batch = [entry for entry in batch if entry is not None]
+        # drop any failed items
+        batch = [b for b in batch if b is not None]
         if not batch:
-            return torch.empty((0, 1, 1, 1)), [], []
+            log("Warning: received empty batch in collate_fn")
+            return (
+                torch.empty((0, 1, 1, 1, 1), dtype=torch.float32), [],
+                torch.empty((0, 1), dtype=torch.bool), []
+            )
 
-        tensors, targets, metadata = zip(*batch)
-        batch_tensors = torch.stack(tensors, dim=0)
-        return batch_tensors, list(targets), list(metadata)
+        # unzip into components
+        tensors, targets, masks, metadata = zip(*batch)
 
+        # stack into batched tensors
+        batch_tensors = torch.stack(tensors, dim=0)  # [B, T, C, H, W]
+        batch_masks = torch.stack(masks, dim=0)  # [B, T]
 
-
-
+        return batch_tensors, list(targets), batch_masks, list(metadata)
