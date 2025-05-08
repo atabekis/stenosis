@@ -20,7 +20,7 @@ from util import log
 from config import NUM_CLASSES
 
 from models.stage1.retinanet import FPNRetinaNet as BaselineRetinaNet  # to get the base configurations
-from models.stage2_v2.tsm_backbone import tsm_efficientnet_b0
+from models.stage2.tsm_backbone import tsm_efficientnet_b0
 
 
 
@@ -42,7 +42,7 @@ class TSMRetinaNet(nn.Module):
     FOCAL_LOSS_ALPHA = BaselineRetinaNet.FOCAL_LOSS_ALPHA
     FOCAL_LOSS_GAMMA = BaselineRetinaNet.FOCAL_LOSS_GAMMA
 
-    DETECTIONS_PER_IMAGE_AFTER_NMS = BaselineRetinaNet.DETECTIONS_PER_IMAGE_AFTERNMS
+    DETECTIONS_PER_IMAGE_AFTER_NMS = BaselineRetinaNet.DETECTIONS_PER_IMAGE_AFTER_NMS
 
 
     def __init__(
@@ -60,6 +60,20 @@ class TSMRetinaNet(nn.Module):
         matcher_allow_low_quality: bool = True, # default
     ):
         super().__init__()
+
+
+        log("Initializing TSMRetinaNet with parameters:")
+        log(f"  Num classes: {self.NUM_CLASSES}")
+        log(f"  FPN out channels: {self.FPN_OUT_CHANNELS}")
+        log(f"  Anchor sizes: {self.ANCHOR_SIZES}")
+        log(f"  Anchor aspect ratios: {self.ANCHOR_ASPECT_RATIOS}")
+        log(f"  Score threshold: {self.SCORE_THRESH}")
+        log(f"  NMS threshold: {self.NMS_THRESH}")
+        log(f"  Focal Loss alpha: {self.FOCAL_LOSS_ALPHA}")
+        log(f"  Focal Loss gamma: {self.FOCAL_LOSS_GAMMA}")
+        log(f"  Pretrained backbone: {pretrained_backbone}")
+        log(f"  Detections per image: {self.DETECTIONS_PER_IMAGE_AFTER_NMS}")
+        log(f"  Inserting TSM to internal stages {tsm_stages_indices}")
 
         self.t_clip = t_clip
 
@@ -81,9 +95,9 @@ class TSMRetinaNet(nn.Module):
 
         # 4. RetinaNet head
         self.head = RetinaNetHead(
-            in_channels=self.fpn_out_channels,
+            in_channels=self.FPN_OUT_CHANNELS,
             num_anchors=num_anchors,
-            num_classes=self.num_classes
+            num_classes=self.NUM_CLASSES
         )
 
         self.head.classification_head.focal_loss_alpha = self.FOCAL_LOSS_ALPHA

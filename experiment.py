@@ -281,9 +281,15 @@ class Experiment:
             'focal_gamma': cfg.get('focal_gamma', FOCAL_LOSS_GAMMA),
         }
         if cfg['model_stage'] == 2:
-             hparams_to_log['tsm_div'] = cfg.get('tsm_div')
+             hparams_to_log['tsm_shift_fraction'] = cfg.get('tsm_div')
              hparams_to_log['tsm_shift_mode'] = cfg.get('tsm_shift_mode')
              hparams_to_log['t_clip'] = cfg.get('t_clip')
+
+        for key, value in hparams_to_log.items():
+            if value is None:
+                hparams_to_log[key] = "None"
+            elif not isinstance(value, (str, int, float, bool)):
+                hparams_to_log[key] = str(value)
 
 
         self.lightning_module = DetectionLightningModule(
