@@ -35,13 +35,13 @@ CLASSES = ['__background__', 'stenosis']  # binary task 1: stenosis, 0: backgrou
 NUM_CLASSES = len(CLASSES)
 
 DEBUG = False
-DEBUG_SIZE = 0.01  # keep % (DEBUG_SIZE * 100) of data
+DEBUG_SIZE = 0.10  # keep % (DEBUG_SIZE * 100) of data
 
 NUM_WORKERS = get_optimal_workers() if not DEBUG else 4
 
 
 # -------------- MODEL-SPECIFIC CONTROLS ---------- #
-FOCAL_LOSS_ALPHA = 0.75
+FOCAL_LOSS_ALPHA = 0.25
 FOCAL_LOSS_GAMMA = 2.0
 GIOU_LOSS_COEF = 2.0
 L1_LOSS_COEF = 5.0

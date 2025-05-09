@@ -400,10 +400,12 @@ if __name__ == "__main__":
     parser.add_argument("--repeat_channels", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--deterministic", action=argparse.BooleanOptionalAction, default=False)
 
-    # Model-specific
-    parser.add_argument("--t_clip", type=int, default=T_CLIP)
+    # # Model-specific: RetinaNet
+    # parser.add_argument("--focal_alpha", type=float, default=0.25)
+    # parser.add_argument("--focal_gamma", type=float, default=2.0)
 
-    # Model-specific: TSM
+    # Model-specific: Stages 2, 3
+    parser.add_argument("--t_clip", type=int, default=T_CLIP)
     parser.add_argument("--tsm_shift_fraction", type=int, default=0.125)
     parser.add_argument("--tsm_shift_mode", type=str, choices=["residual","inplace"], default="residual")
 

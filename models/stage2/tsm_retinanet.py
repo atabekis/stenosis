@@ -103,11 +103,8 @@ class TSMRetinaNet(nn.Module):
         self.head.classification_head.focal_loss_alpha = self.FOCAL_LOSS_ALPHA
         self.head.classification_head.focal_loss_gamma = self.FOCAL_LOSS_GAMMA
 
-        # 5. box coder and inference params
+        # 5. box coder
         self.box_coder = BoxCoder(weights=(1.0, 1.0, 1.0, 1.0))
-        self.score_thresh = self.SCORE_THRESH
-        self.nms_thresh = self.NMS_THRESH
-        self.detections_per_img = self.DETECTIONS_PER_IMAGE_AFTER_NMS
 
         # 6. matcher
         self.proposal_matcher = Matcher(
@@ -202,23 +199,23 @@ class TSMRetinaNet(nn.Module):
             pred_boxes_per_image = self.box_coder.decode_single(box_regression_per_image, anchors_per_image)
             pred_boxes_per_image = box_ops.clip_boxes_to_image(pred_boxes_per_image, image_shape)
 
-            labels_per_image = torch.arange(self.num_classes, device=scores_per_image.device)
+            labels_per_image = torch.arange(self.NUM_CLASSES, device=scores_per_image.device)
             labels_per_image = labels_per_image.view(1, -1).expand_as(scores_per_image)
 
             scores_per_image = scores_per_image.flatten()
             labels_per_image = labels_per_image.flatten()
 
-            pred_boxes_per_image = pred_boxes_per_image.unsqueeze(1).expand(-1, self.num_classes, -1)
+            pred_boxes_per_image = pred_boxes_per_image.unsqueeze(1).expand(-1, self.NUM_CLASSES, -1)
             pred_boxes_per_image = pred_boxes_per_image.reshape(-1, 4)
 
-            inds_to_keep = torch.where((labels_per_image != 0) & (scores_per_image > self.score_thresh))[0]
+            inds_to_keep = torch.where((labels_per_image != 0) & (scores_per_image > self.SCORE_THRESH))[0]
 
             pred_boxes_per_image = pred_boxes_per_image[inds_to_keep]
             scores_per_image = scores_per_image[inds_to_keep]
             labels_per_image = labels_per_image[inds_to_keep]
 
-            keep = box_ops.batched_nms(pred_boxes_per_image, scores_per_image, labels_per_image, self.nms_thresh)
-            keep = keep[:self.detections_per_img]
+            keep = box_ops.batched_nms(pred_boxes_per_image, scores_per_image, labels_per_image, self.NMS_THRESH)
+            keep = keep[:self.DETECTIONS_PER_IMAGE_AFTER_NMS]
 
             final_boxes = pred_boxes_per_image[keep]
             final_scores = scores_per_image[keep]

@@ -44,6 +44,13 @@ class DetectionLightningModule(pl.LightningModule):
 
     Handles training, validation, testing loops, optimization, logging, and metric calculation
     """
+
+    VALID_METRIC_SUFFIXES = {  # these are the final metrics calculated in val/test steps.
+        "mAP_0.5", "mAP", "mAR_100",
+        "AvgIoU_TP_0.5", "AP_small",
+        "Precision_0.5", "Recall_0.5", "F1_0.5"
+    }
+
     def __init__(
             self,
             model: nn.Module,
@@ -72,6 +79,7 @@ class DetectionLightningModule(pl.LightningModule):
 
             # hparam logging/tuning
             hparams_to_log: Optional[dict] = None,
+            hparam_primary_metric: str = 'F1_0.5',
     ):
         super().__init__()
         self.model = model
@@ -89,10 +97,15 @@ class DetectionLightningModule(pl.LightningModule):
         self.giou_loss_coef = giou_loss_coef
         self.cls_loss_coef = cls_loss_coef
         self.positive_class_id = positive_class_id
+        self.hparam_primary_metric = hparam_primary_metric
 
 
         if model_stage not in [1, 2, 3]:
             raise ValueError(f'Invalid model_stage: {model_stage}. Must be in [1, 2, 3]')
+
+        if self.hparam_primary_metric not in self.VALID_METRIC_SUFFIXES:
+            raise ValueError(f'hparam_primary_metric_name ({self.hparam_primary_metric}) is not in the set of allowed'
+                             f'metric suffixes: {self.VALID_METRIC_SUFFIXES}')
 
         self._hparams_to_log = hparams_to_log or {}
         self.save_hyperparameters(ignore=['model', 'normalize_params', 'hparams_to_log'])
@@ -438,7 +451,7 @@ class DetectionLightningModule(pl.LightningModule):
             cpu_targs = [{k: v.cpu() for k, v in t.items()} for t in targs_attr]
 
             ap_small = self.compute_ap_for_area(cpu_preds, cpu_targs, max_area=32**2)
-            precision, recall, f1, avg_iou_tp = self.compute_prf1(cpu_preds, cpu_targs, iou_threshold=0.1)  # TODO: SET BACK TO 0.5
+            precision, recall, f1, avg_iou_tp = self.compute_prf1(cpu_preds, cpu_targs, iou_threshold=0.5)
 
             # log the rest
             extra = {
@@ -539,21 +552,36 @@ class DetectionLightningModule(pl.LightningModule):
                 monitor = getattr(ckpt, 'monitor', 'val_metric').replace('/', '_')
 
                 # prepare HParam metrics
-                hp_metrics = {}
+                hp_metrics_to_log = {} # Use a distinct name for clarity
                 if best_score is not None:
-                    hp_metrics[f"hp/best_{monitor}"] = best_score.item()
-                hp_metrics.update({
-                    f"hp/{k.replace('/', '_')}": (v.item() if torch.is_tensor(v) else v)
-                    for k, v in final_metrics.items()
-                    if isinstance(v, (int, float, torch.Tensor))
-                })
-                if not hp_metrics:
-                    hp_metrics = {"hp/metric_collection_failed": 1.0}
+                    hp_metrics_to_log[f"hp/best_{monitor}"] = best_score.item()
 
-                # log in one shot
-                params = getattr(self, '_hparams_to_log', {})
-                logger.log_hyperparams(params, hp_metrics)
+
+                for k, v in final_metrics.items():
+                    if isinstance(v, (int, float, torch.Tensor)):
+                        metric_value = v.item() if torch.is_tensor(v) else v
+                        hp_metrics_to_log[f"hp/{k.replace('/', '_')}"] = metric_value
+
+
+                # determine the value for the hp metric (metric from self.hparam_primary_metric)
+                primary_metric_val = None
+                key_in_final_metrics = f'test/{self.hparam_primary_metric}'
+
+                if key_in_final_metrics in final_metrics:
+                    primary_metric_val = final_metrics[key_in_final_metrics]
+                    primary_metric_val = primary_metric_val.item() if torch.is_tensor(primary_metric_val) else float(primary_metric_val)
+                    hp_metrics_to_log["hp_metric"] = primary_metric_val
+                else:  # will remove this later after adding sanity checking for hparams in __init__
+                    log(f"Warning: Specified hparam_primary_metric_name '{self.hparam_primary_metric_name}' "
+                        f"(expected key: '{key_in_final_metrics}') not found in final_metrics. "
+                        f"Available keys: {list(final_metrics.keys())}. "
+                        f"Setting 'hp/hp_metric' to 0.0 as a fallback.")
+                    hp_metrics_to_log["hp_metric"] = 0.0 # fallback
+
+                params_for_log = self.hparams.copy()
+                logger.log_hyperparams(params_for_log, hp_metrics_to_log)
                 logger.save()
+
 
             if self.num_log_test_images and getattr(logger, 'experiment', None):
                  self._log_image_samples_to_tensorboard(
