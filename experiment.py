@@ -98,10 +98,12 @@ class Experiment:
     def _validate_config(self):
         """Ensure configuration keys are present and valid."""
         cfg = self.config
-        # Required keys
-        for key in ('model_stage', 'max_epochs', 'effective_batch_size', 'gpus'):
-            if key not in cfg:
-                raise ValueError(f"Missing required configuration key: '{key}'")
+        required_keys = ['model_stage', 'max_epochs', 'effective_batch_size', 'gpus']
+
+        if not cfg.get('test_model_path'):
+            for key in required_keys:
+                if key not in cfg:
+                    raise ValueError(f"Missing required configuration key: '{key}'")
 
         # model_stage must be 1, 2, or 3
         if cfg['model_stage'] not in (1, 2, 3):
@@ -317,9 +319,16 @@ class Experiment:
                 'debug',
                 'profiler_enabled',
                 'model_stage',
+                'pretrained',
+                'max_epochs',
                 'batch_size',
                 'effective_batch_size',
                 'learning_rate',
+                'use_augmentation',
+                'weight_decay',
+                'warmup_steps',
+                'normalize_params',
+                'repeat_channels'
                 't_clip',
                 'gpus',
                 'num_workers',
@@ -368,6 +377,8 @@ class Experiment:
             log_dir=rc['log_dir'],
             profiler_enabled=rc.get('profiler_enabled', False),
             profiler_scheduler_conf=rc.get('profiler_scheduler_conf'),
+
+            testing_ckpt_path=rc.get('test_model_path', None),
         )
 
 
@@ -412,6 +423,7 @@ if __name__ == "__main__":
     # Paths
     parser.add_argument("--dataset_dir", type=str, default=CADICA_DATASET_DIR)
     parser.add_argument("--log_dir", type=str, default=LOGS_DIR)
+    parser.add_argument("--test_model_path", type=str, default=None)
 
     args = parser.parse_args()
 

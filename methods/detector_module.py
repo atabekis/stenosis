@@ -241,8 +241,11 @@ class DetectionLightningModule(pl.LightningModule):
             return
 
         # 3. forward pass (for val & test)
+        original_train_state_pred = self.model.training
+        self.model.eval()
         with torch.no_grad():
             preds = self.forward(images, targets=None, masks=masks)
+        self.model.train(original_train_state_pred)
 
         # 4. flatten preds/targets according to mask
         flat_mask = masks.view(-1)
@@ -330,8 +333,8 @@ class DetectionLightningModule(pl.LightningModule):
             orig_training_state = self.model.training
             self.model.train()
 
-            with torch.no_grad():
-                loss_dict = self.forward(images, targets=targets)
+            # with torch.no_grad():
+            loss_dict = self.forward(images, targets=targets)
 
             self.model.train(orig_training_state)
 

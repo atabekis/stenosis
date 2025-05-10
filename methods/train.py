@@ -36,6 +36,8 @@ def train_model(
         log_dir: str = LOGS_DIR,
         profiler_enabled: bool = False,
         profiler_scheduler_conf: Optional[dict] = None,
+
+        testing_ckpt_path:Optional[str] = None,
 ):
     """
     Train given model, supports single and multi-gpu
@@ -53,13 +55,22 @@ def train_model(
     :param accumulate_grad_batches: number of batches to accumulate for larger effective batch size
     :param profiler_enabled: Whether PyTorch Lightning Profiler instance (e.g., PyTorchProfiler) activated
     :param profiler_scheduler_conf: config dictionary for steps/warmup/cycle to be used by the profiler scheduler
+    :param testing_ckpt_path: If provided, skip training and only run testing using this checkpoint.
+
     :return: trained model
     """
 
     Path(log_dir).mkdir(parents=True, exist_ok=True)
     enable_pbar = not "SLURM_JOB_ID" in os.environ
 
-    experiment_name = f"{model.__class__.__name__}/{('augmented' if use_augmentation else 'unaugmented')}"
+    experiment_name_core = model.__class__.__name__
+    if testing_ckpt_path:
+        experiment_folder_suffix = 'test_only'
+    else:
+        experiment_folder_suffix = 'augmented' if use_augmentation else 'unaugmented'
+
+
+    experiment_name = f'{experiment_name_core}/{experiment_folder_suffix}'
 
     logger = TensorBoardLogger(save_dir=log_dir, name=experiment_name)
 
@@ -144,15 +155,30 @@ def train_model(
 
 
     trainer = pl.Trainer(**trainer_kwargs)
-    trainer.fit(lightning_module, data_module)
 
-    ckpt = checkpoint_callback.best_model_path or 'last'
-    trainer.test(lightning_module, datamodule=data_module, ckpt_path=ckpt)
-
-    return {
+    results_dict =  {
         "trainer": trainer,
         "logger": logger,
         "checkpoint_callback": checkpoint_callback,
     }
+
+    if testing_ckpt_path:
+        log(f"Performing testing only using checkpoint: {testing_ckpt_path}")
+        trainer.test(lightning_module, datamodule=data_module, ckpt_path=testing_ckpt_path)
+        results_dict["tested_checkpoint_path"] = testing_ckpt_path
+    else:
+        log("Starting training...")
+        trainer.fit(lightning_module, data_module)
+
+        ckpt_to_test = checkpoint_callback.best_model_path
+        if not ckpt_to_test:
+            log("No best model checkpoint found from this training run. Attempting to test 'last' checkpoint.")
+            ckpt_to_test = 'last'
+
+        log(f"Finished training. Testing with checkpoint: {ckpt_to_test}")
+        trainer.test(lightning_module, datamodule=data_module, ckpt_path=ckpt_to_test)
+
+    return results_dict
+
 
 
