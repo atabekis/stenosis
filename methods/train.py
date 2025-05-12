@@ -167,7 +167,6 @@ def train_model(
         trainer.test(lightning_module, datamodule=data_module, ckpt_path=testing_ckpt_path)
         results_dict["tested_checkpoint_path"] = testing_ckpt_path
     else:
-        log("Starting training...")
         trainer.fit(lightning_module, data_module)
 
         ckpt_to_test = checkpoint_callback.best_model_path

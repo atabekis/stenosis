@@ -28,7 +28,6 @@ class Reader:
     """
     def __init__(self, dataset_dir, debug=DEBUG) -> None:
         self.dataset_dir = dataset_dir
-
         self.xca_images = []
 
         self._which_dataset()
@@ -36,6 +35,8 @@ class Reader:
         if debug:
             log(f'Debug mode turned on, sampling {int(DEBUG_SIZE * 100)}% of the images')
             self.xca_images = random.sample(self.xca_images, int(len(self.xca_images) * DEBUG_SIZE))  # random.seed is set in pl.seed_everything
+
+        log(f'Reader constructed {len(self.xca_images)} XCA images from the {self.dataset_type} dataset.')
 
     def _which_dataset(self):
         self.dataset_type = 'DANILOV' if 'DANILOV' in str(self.dataset_dir) else 'CADICA'
@@ -272,6 +273,8 @@ class Reader:
 
         with concurrent.futures.ThreadPoolExecutor() as executor:
             videos = list(executor.map(process_video, videos_dict.items()))
+
+        log(f'Reader constructed {len(videos)} total videos.')
 
         return sorted(videos, key=lambda v: (v.patient_id, v.video_id))
 

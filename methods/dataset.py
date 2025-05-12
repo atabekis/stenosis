@@ -53,12 +53,12 @@ class XCADataset(Dataset):
         self.using_video_format = isinstance(data_list[0], XCAVideo) if data_list else True
         self.t_clip = t_clip if self.using_video_format else 1  # t_clip is 1 for images naturally
 
-        if normalize_params is None and is_train:
-            self.normalize_params = self._calculate_normalization_params()
-        elif normalize_params is None and not is_train:
-            self.normalize_params = {'mean': 0.5, 'std': 0.5}
-        else:
+        if normalize_params is not None:
             self.normalize_params = normalize_params
+        elif is_train:
+            self.normalize_params = self._calculate_normalization_params()
+        else:
+            self.normalize_params = {'mean': 0.5, 'std': 0.5}
 
         # define base transforms
         self.base_transform = A.Compose([
@@ -68,7 +68,7 @@ class XCADataset(Dataset):
 
         if self.use_augmentation:
             self.augment_transform = A.ReplayCompose([
-                A.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2, p=0.75),
+                A.RandomBrightnessContrast(brightness_limit=0.1, contrast_limit=0.5, p=0.75),
                 A.OneOf([ # will apply one of these augmentations with p=0.5 chance
                     A.GaussianBlur(blur_limit=(3, 7), p=0.5),
                     A.MotionBlur(blur_limit=(3, 7), p=0.5),
@@ -82,21 +82,7 @@ class XCADataset(Dataset):
 
         self.transform_applied = False
 
-
-        # if self.using_video_format:
-        #     original_count = len(self.data_list)
-        #     self.data_list = [
-        #         v for v in self.data_list
-        #         if isinstance(v, XCAVideo) and v.frame_count >= self.t_clip
-        #     ]
-        #     filtered_count = len(self.data_list)
-        #     if original_count != filtered_count:
-        #         log(f"Filtered out {original_count - filtered_count} videos shorter than t_clip={self.t_clip}. Remaining videos: {filtered_count}")
-        #     if not self.data_list and original_count > 0:
-        #         raise ValueError(f"No videos remaining after filtering for t_clip={self.t_clip}. Check video lengths and t_clip setting.")
-
         self.epoch = 0   # used to reset the augmentation parameters per epoch
-
 
 
     def _calculate_normalization_params(self, min_sample_size=1000):
