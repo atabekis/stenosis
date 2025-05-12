@@ -14,11 +14,7 @@ from models.stage1.backbone import EfficientNetFPNBackbone
 
 # Local imports
 from util import log
-from config import (
-    NUM_CLASSES,
-    FOCAL_LOSS_ALPHA,
-    FOCAL_LOSS_GAMMA,
-)
+
 
 class FPNRetinaNet(nn.Module):
     """
@@ -26,76 +22,63 @@ class FPNRetinaNet(nn.Module):
     Uses the efficient net + FPN backbone and standard FPNRetinaNet heads.
     """
 
-    NUM_CLASSES = NUM_CLASSES
-    FPN_OUT_CHANNELS = 256
-    # ANCHOR_SIZES = (
-    #     (8, 11, 16),  #  smaller objects
-    #     (22, 32, 45),  # medium objects
-    #     (64, 90, 128)  # larger objects
-    # )
 
-    ANCHOR_SIZES = (  # smaller anchor sizes used
-        (16, 24, 32),
-        (48, 64, 96),
-        (128, 192, 256)
-    )
-    ANCHOR_ASPECT_RATIOS = ((0.5, 1.0, 2.0),) * len(ANCHOR_SIZES)
-
-    # inference params
-    SCORE_THRESH = 0.3
-    NMS_THRESH = 0.4
-
-    FOCAL_LOSS_ALPHA = FOCAL_LOSS_ALPHA
-    FOCAL_LOSS_GAMMA = FOCAL_LOSS_GAMMA
-
-    DETECTIONS_PER_IMAGE_AFTER_NMS = 20
-
-    def __init__(
-            self,
-            pretrained: bool = True,
-    ):
+    def __init__(self, config: dict):
         """
          Initialize FPNRetinaNet model
         """
         super().__init__()
 
+
+        num_classes = config.get("num_classes")
+        fpn_out_channels = config.get("fpn_out_channels", 256)
+        anchor_sizes = config["anchor_sizes"]
+        anchor_aspect_ratios = config["anchor_aspect_ratios"]
+        score_thresh = config.get("inference_score_thresh", 0.3)
+        nms_thresh = config.get("inference_nms_thresh", 0.4)
+        focal_loss_alpha = config.get("focal_loss_alpha")
+        focal_loss_gamma = config.get("focal_loss_gamma")
+        pretrained_backbone = config.get("pretrained_backbone", True)
+        detections_per_img = config.get("inference_detections_per_img")
+
+
         log("Initializing FPNRetinaNet with parameters:")
-        log(f"  Num classes: {self.NUM_CLASSES}")
-        log(f"  FPN out channels: {self.FPN_OUT_CHANNELS}")
-        log(f"  Anchor sizes: {self.ANCHOR_SIZES}")
-        log(f"  Anchor aspect ratios: {self.ANCHOR_ASPECT_RATIOS}")
-        log(f"  Score threshold: {self.SCORE_THRESH}")
-        log(f"  NMS threshold: {self.NMS_THRESH}")
-        log(f"  Focal Loss alpha: {self.FOCAL_LOSS_ALPHA}")
-        log(f"  Focal Loss gamma: {self.FOCAL_LOSS_GAMMA}")
-        log(f"  Pretrained backbone: {pretrained}")
-        log(f"  Detections per image: {self.DETECTIONS_PER_IMAGE_AFTER_NMS}")
+        log(f"  Num classes: {num_classes}")
+        log(f"  FPN out channels: {fpn_out_channels}")
+        log(f"  Anchor sizes: {anchor_sizes}")
+        log(f"  Anchor aspect ratios: {anchor_aspect_ratios}")
+        log(f"  Score threshold: {score_thresh}")
+        log(f"  NMS threshold: {nms_thresh}")
+        log(f"  Focal Loss alpha: {focal_loss_alpha}")
+        log(f"  Focal Loss gamma: {focal_loss_gamma}")
+        log(f"  Pretrained backbone: {pretrained_backbone}")
+        log(f"  Detections per image: {detections_per_img}")
 
         # 1. backbone & fpn
         self.backbone = EfficientNetFPNBackbone(
-            out_channels=self.FPN_OUT_CHANNELS,
-            pretrained=pretrained,
+            out_channels=fpn_out_channels,
+            pretrained=pretrained_backbone,
         )
 
         # 2. anchor generator
         self.anchor_generator = AnchorGenerator(
-            self.ANCHOR_SIZES,
-            aspect_ratios=self.ANCHOR_ASPECT_RATIOS,
+            anchor_sizes,
+            aspect_ratios=anchor_aspect_ratios,
         )
 
         # 3. FPNRetinaNet model
         self.retinanet = RetinaNet(
             backbone=self.backbone,
-            num_classes=self.NUM_CLASSES,
+            num_classes=num_classes,
             anchor_generator=self.anchor_generator,
-            score_threshold=self.SCORE_THRESH,
-            nms_threshold=self.NMS_THRESH,
-            detections_per_img=self.DETECTIONS_PER_IMAGE_AFTER_NMS,
+            score_threshold=score_thresh,
+            nms_threshold=nms_thresh,
+            detections_per_img=detections_per_img,
         )
 
 
-        self.retinanet.head.classification_head.focal_loss_alpha = self.FOCAL_LOSS_ALPHA
-        self.retinanet.head.classification_head.focal_loss_gamma = self.FOCAL_LOSS_GAMMA
+        self.retinanet.head.classification_head.focal_loss_alpha = focal_loss_alpha
+        self.retinanet.head.classification_head.focal_loss_gamma = focal_loss_gamma
 
     def forward(self,
             images: Union[list[torch.Tensor], torch.Tensor],

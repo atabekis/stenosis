@@ -9,7 +9,6 @@ import traceback
 # Torch + PL
 import torch
 import pytorch_lightning as pl
-from pytorch_lightning.loggers import TensorBoardLogger
 
 # Local imports - methods
 from methods.reader import Reader
@@ -18,16 +17,20 @@ from methods.data_module import XCADataModule
 from methods.detector_module import DetectionLightningModule
 
 # Local imports - models
+from models.stage1.faster_rcnn import FasterRCNN
 from models.stage1.retinanet import FPNRetinaNet
 from models.stage2.tsm_retinanet import TSMRetinaNet
+from models.stage3.thanos_detector import THANOSDetector
 
 # Local imports - controls & utility
 from util import log
 from config import (
     SEED, DEBUG, NUM_WORKERS,
     CADICA_DATASET_DIR, LOGS_DIR,
+    DEFAULT_HEIGHT, DEFAULT_WIDTH,
     TRAIN_SIZE, VAL_SIZE, TEST_SIZE,
-    POSITIVE_CLASS_ID, FOCAL_LOSS_ALPHA, FOCAL_LOSS_GAMMA, T_CLIP
+    NUM_CLASSES, POSITIVE_CLASS_ID, FOCAL_LOSS_ALPHA, FOCAL_LOSS_GAMMA, T_CLIP,
+    STAGE1_RETINANET_DEFAULT_CONFIG, STAGE2_TSM_RETINANET_DEFAULT_CONFIG, STAGE3_THANOS_DEFAULT_CONFIG
 )
 
 # --- Default base configs ---
@@ -41,6 +44,7 @@ BASE_CONFIG_SINGLE_GPU = {
     'learning_rate': 1e-4,
     'weight_decay': 1e-4,
     'warmup_steps': 100,
+    'use_scheduler': True,
     'patience': 10,
     'normalize_params': DEFAULT_NORMALIZE_PARAMS,
     'precision': '16-mixed',
@@ -172,35 +176,86 @@ class Experiment:
 
     def _configure_run_params(self):
         """
-        Merge in base configs (single‐ or multi‐GPU), apply user overrides,
-        and compute gradient accumulation to hit the target effective batch size.
+        Merge in base configs (single‐ or multi‐GPU), then stage-specific model defaults,
+        then apply user overrides from argparse (self.config),
+        and compute gradient accumulation.
+        The final resolved parameters are stored in self.run_config.
         """
         num_gpus = self.run_config.get('num_target_gpus', 0)
+        current_run_config_keys = self.run_config.copy()
 
-        # 1. Pick and change base config
+        self.run_config = {}
+
+        # 1. base GPU config
         if num_gpus > 1:
-            base = BASE_CONFIG_MULTI_GPU.copy()
-            default_strategy = 'ddp'
+            base_gpu_config = BASE_CONFIG_MULTI_GPU.copy()
+            default_strategy_for_gpus = 'ddp'
         else:
-            base = BASE_CONFIG_SINGLE_GPU.copy()
-            default_strategy = None
+            base_gpu_config = BASE_CONFIG_SINGLE_GPU.copy()
+            default_strategy_for_gpus = None
 
-        if self.run_config.get('strategy') is None:
-            base['strategy'] = default_strategy
+        self.run_config.update(base_gpu_config)
 
-        # 2. Merge base & user config
-        self.run_config.update({**base, **self.config})
+        # 2. stage-specific model config
+        stage = self.config.get('model_stage')
+        if stage == 1: model_default_config = STAGE1_RETINANET_DEFAULT_CONFIG.copy()
+        elif stage == 2: model_default_config = STAGE2_TSM_RETINANET_DEFAULT_CONFIG.copy()
+        elif stage == 3:
+            model_default_config = STAGE3_THANOS_DEFAULT_CONFIG.copy()
+            _height = self.run_config.get('height', self.config.get('height', DEFAULT_HEIGHT))
+            _width = self.run_config.get('width', self.config.get('width', DEFAULT_WIDTH))
+            _t_clip_for_pe = self.run_config.get('t_clip', self.config.get('t_clip', T_CLIP))
 
-        # 3. Compute accumulate_grad_batches
+            model_default_config["max_spatial_tokens_pe"] = (_height // 8) * (_width // 8)
+            model_default_config["max_temporal_tokens_pe"] = _t_clip_for_pe
+        else:
+            raise ValueError(f"Invalid model_stage {stage} in _configure_run_params.")
+
+        self.run_config.update(model_default_config)
+
+        # 3. apply user overrides from args
+        argparse_overrides = {k: v for k, v in self.config.items() if v is not None}
+        self.run_config.update(argparse_overrides)
+
+        if stage == 3:
+            final_height = self.run_config.get('height', DEFAULT_HEIGHT)
+            final_width = self.run_config.get('width', DEFAULT_WIDTH)
+            final_t_clip = self.run_config['t_clip']
+
+            self.run_config["max_spatial_tokens_pe"] = (final_height // 8) * (final_width // 8)
+            self.run_config["max_temporal_tokens_pe"] = final_t_clip
+
+            if "num_classes" not in self.run_config or self.run_config["num_classes"] is None:
+                self.run_config["num_classes"] = NUM_CLASSES
+
+            if "fpn_out_channels" not in self.run_config or self.run_config["fpn_out_channels"] is None:
+                self.run_config["fpn_out_channels"] = self.run_config.get("transformer_d_model", 256)
+
+        if self.run_config.get('strategy') is None and num_gpus > 1:
+            self.run_config['strategy'] = default_strategy_for_gpus
+        elif self.run_config.get('strategy') == "none":
+            self.run_config['strategy'] = None
+
+        self.run_config['gpus'] = current_run_config_keys.get('gpus')
+        self.run_config['num_target_gpus'] = current_run_config_keys.get('num_target_gpus')
+
+        if 'strategy' in self.config and self.config['strategy'] is not None:
+            self.run_config['strategy'] = self.config['strategy']
+
         per_device_bs = self.run_config['batch_size']
-        target_bs = self.run_config['effective_batch_size']
-        global_bs = per_device_bs * max(1, num_gpus)
+        target_eff_bs = self.run_config['effective_batch_size']
 
-        if global_bs: accum_steps = max(1, target_bs // global_bs)
-        else: accum_steps = 1
+        actual_num_gpus_for_calc = max(1, num_gpus)
+        global_bs_without_accum = per_device_bs * actual_num_gpus_for_calc
+
+        if global_bs_without_accum > 0:
+            accum_steps = max(1, int(round(target_eff_bs / global_bs_without_accum)))
+        else:
+            accum_steps = 1
+            log("Warning: global_bs_without_accum is 0. Setting accum_steps to 1.")
 
         self.run_config['accumulate_grad_batches'] = accum_steps
-        self.run_config['effective_batch_size_achieved'] = global_bs * accum_steps
+        self.run_config['effective_batch_size_achieved'] = global_bs_without_accum * accum_steps
 
 
     def _setup_data(self):
@@ -241,27 +296,18 @@ class Experiment:
             seed=rc['seed'],
         )
 
+
     def _setup_model(self):
         """Instantiate the appropriate model class based on `model_stage`."""
         stage = self.run_config['model_stage']
-        pretrained = self.run_config.get('pretrained', True)
+        model_init_config = self.run_config
 
         if stage == 1:
-            self.model = FPNRetinaNet(pretrained=pretrained)
-
+            self.model = FPNRetinaNet(config=model_init_config)
         elif stage == 2:
-            self.model = TSMRetinaNet(
-                t_clip=self.run_config['t_clip'],
-                shift_fraction=self.run_config.get('tsm_shift_fraction', 0.125),
-                shift_mode=self.run_config.get('tsm_shift_mode', 'residual'),
-                pretrained_backbone=pretrained,
-            )
-
+            self.model = TSMRetinaNet(config=model_init_config)
         elif stage == 3:
-            raise NotImplementedError("Stage 3 model instantiation is not implemented yet.")
-
-        else:
-            raise ValueError(f"Invalid model_stage {stage!r} in run_config")
+            self.model = THANOSDetector(config=model_init_config)
 
 
     def _setup_lightning_module(self):
@@ -270,29 +316,50 @@ class Experiment:
             raise RuntimeError("Model must be initialized before the LightningModule.")
 
         cfg = self.run_config
-        effective_bs = cfg['batch_size'] * max(1, cfg['num_target_gpus'])
+        lightning_module_batch_size_arg = cfg['effective_batch_size_achieved']
 
         hparams_to_log = {
-            'lr': cfg['learning_rate'],
-            'eff_batch_size': cfg['effective_batch_size_achieved'],
+            'model_name': self.model.__class__.__name__,
+            'model_stage': cfg['model_stage'],
+            'max_epochs': cfg['max_epochs'],
+            'target_eff_batch_size': cfg['effective_batch_size'],
+            'achieved_eff_batch_size': cfg['effective_batch_size_achieved'],
+            'per_device_batch_size': cfg['batch_size'],
+            'accumulate_grad_batches': cfg['accumulate_grad_batches'],
+            'learning_rate': cfg['learning_rate'],
             'weight_decay': cfg['weight_decay'],
             'warmup_steps': cfg['warmup_steps'],
+            'use_scheduler': cfg.get('use_scheduler', True),
             'use_augmentation': cfg['use_augmentation'],
-            'model_stage': cfg['model_stage'],
-            'focal_alpha': cfg.get('focal_alpha', FOCAL_LOSS_ALPHA),
-            'focal_gamma': cfg.get('focal_gamma', FOCAL_LOSS_GAMMA),
+            'precision': cfg.get('precision', '32-true'),
+            't_clip': cfg.get('t_clip', T_CLIP),
+            'seed': cfg.get('seed'),
+            'num_target_gpus': cfg.get('num_target_gpus'),
+            'strategy': str(cfg.get('strategy')),
         }
+
+        if cfg['model_stage'] == 1 or cfg['model_stage'] == 2 or cfg['model_stage'] == 3:  # common params
+            hparams_to_log['focal_alpha'] = cfg.get('focal_loss_alpha')
+            hparams_to_log['focal_gamma'] = cfg.get('focal_loss_gamma')
+            hparams_to_log['anchor_sizes_p3_first'] = str(cfg.get('anchor_sizes', [(0,)])[0][0])  # log first anchor of P3
+
         if cfg['model_stage'] == 2:
-             hparams_to_log['tsm_shift_fraction'] = cfg.get('tsm_div')
-             hparams_to_log['tsm_shift_mode'] = cfg.get('tsm_shift_mode')
-             hparams_to_log['t_clip'] = cfg.get('t_clip')
+            hparams_to_log['tsm_shift_fraction'] = cfg.get('tsm_shift_fraction')
+            hparams_to_log['tsm_shift_mode'] = cfg.get('tsm_shift_mode')
+
+        if cfg['model_stage'] == 3:
+            hparams_to_log['stem_lr'] = cfg.get('stem_learning_rate')
+            hparams_to_log['tf_d_model'] = cfg.get('transformer_d_model')
+            hparams_to_log['tf_n_head'] = cfg.get('transformer_n_head')
+            hparams_to_log['tf_spatial_layers'] = cfg.get('transformer_num_spatial_layers')
+            hparams_to_log['tf_temporal_layers'] = cfg.get('transformer_num_temporal_layers')
+            hparams_to_log['tf_fpn_levels_proc'] = str(cfg.get('fpn_levels_to_process_temporally'))
 
         for key, value in hparams_to_log.items():
             if value is None:
                 hparams_to_log[key] = "None"
             elif not isinstance(value, (str, int, float, bool)):
                 hparams_to_log[key] = str(value)
-
 
         self.lightning_module = DetectionLightningModule(
             model=self.model,
@@ -301,16 +368,18 @@ class Experiment:
             weight_decay=cfg['weight_decay'],
             warmup_steps=cfg['warmup_steps'],
             max_epochs=cfg['max_epochs'],
-            batch_size=effective_bs,
+            batch_size=lightning_module_batch_size_arg,
             accumulate_grad_batches=cfg['accumulate_grad_batches'],
             stem_learning_rate=cfg.get('stem_learning_rate', 1e-5),
-            focal_alpha=getattr(self.model, 'FOCAL_LOSS_ALPHA', FOCAL_LOSS_ALPHA),
-            focal_gamma=getattr(self.model, 'FOCAL_LOSS_GAMMA', FOCAL_LOSS_GAMMA),
+            use_scheduler=cfg.get('use_scheduler', True),
+            focal_alpha=cfg.get('focal_loss_alpha'),
+            focal_gamma=cfg.get('focal_loss_gamma'),
             positive_class_id=cfg.get('positive_class_id', POSITIVE_CLASS_ID),
             normalize_params=cfg['normalize_params'],
             num_log_val_images=cfg.get('num_log_val_images', 1),
             num_log_test_images=cfg.get('num_log_test_images', 'all'),
-            hparams_to_log=hparams_to_log
+            hparams_to_log=hparams_to_log,
+            hparam_primary_metric=cfg.get('hparam_primary_metric', 'F1_0.5')
         )
 
     def _print_config_summary(self):
@@ -323,12 +392,13 @@ class Experiment:
                 'max_epochs',
                 'batch_size',
                 'effective_batch_size',
+                'effective_batch_size_achieved',
                 'learning_rate',
                 'use_augmentation',
                 'weight_decay',
                 'warmup_steps',
                 'normalize_params',
-                'repeat_channels'
+                'repeat_channels',
                 't_clip',
                 'gpus',
                 'num_workers',
@@ -403,6 +473,7 @@ if __name__ == "__main__":
     parser.add_argument("--patience", type=int, default=None)
     parser.add_argument("--warmup_steps", type=int, default=None)
     parser.add_argument("--weight_decay", type=float, default=None)
+    parser.add_argument("--use_scheduler", action=argparse.BooleanOptionalAction, default=True)
 
     parser.add_argument("--use_augmentation", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--pretrained", action=argparse.BooleanOptionalAction, default=True)

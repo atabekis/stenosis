@@ -33,9 +33,12 @@ assert np.isclose(TRAIN_SIZE + VAL_SIZE + TEST_SIZE, 1), 'Train, Validation and 
 
 CLASSES = ['__background__', 'stenosis']  # binary task 1: stenosis, 0: background, one foreground class
 NUM_CLASSES = len(CLASSES)
+POSITIVE_CLASS_ID = 1
 
+
+# ------------ RUN-SPECIFIC CONTROLS --------------#
 DEBUG = False
-DEBUG_SIZE = 0.10  # keep % (DEBUG_SIZE * 100) of data
+DEBUG_SIZE = 0.25  # keep % (DEBUG_SIZE * 100) of data
 
 NUM_WORKERS = get_optimal_workers() if not DEBUG else 4
 
@@ -43,7 +46,63 @@ NUM_WORKERS = get_optimal_workers() if not DEBUG else 4
 # -------------- MODEL-SPECIFIC CONTROLS ---------- #
 FOCAL_LOSS_ALPHA = 0.25
 FOCAL_LOSS_GAMMA = 2.0
+DETECTIONS_PER_IMG_AFTER_NMS = 1
+
 GIOU_LOSS_COEF = 2.0
 L1_LOSS_COEF = 5.0
 CLS_LOSS_COEF = 2.0
-POSITIVE_CLASS_ID = 1
+
+# DEFAULTS
+DEFAULT_ANCHOR_SIZES = ((8, 11, 16), (22, 32, 45), (64, 90, 128))
+# DEFAULT_ANCHOR_SIZES = ((16, 24, 32), (48, 64, 96), (128, 192, 256))
+DEFAULT_ANCHOR_ASPECT_RATIOS = ((0.5, 1.0, 2.0),) * len(DEFAULT_ANCHOR_SIZES)
+
+FPN_OUT_CHANNELS = 256
+
+INFERENCE_SCORE_THRESH = 0.1
+INFERENCE_NMS_THRESH = 0.4
+
+# -------- SHARED BASE CONFIG -------- #
+COMMON_RETINANET_CONFIG = {
+    "fpn_out_channels": FPN_OUT_CHANNELS,
+    "num_classes": NUM_CLASSES,
+    "anchor_sizes": DEFAULT_ANCHOR_SIZES,
+    "anchor_aspect_ratios": DEFAULT_ANCHOR_ASPECT_RATIOS,
+    "focal_loss_alpha": FOCAL_LOSS_ALPHA,
+    "focal_loss_gamma": FOCAL_LOSS_GAMMA,
+    "inference_score_thresh": INFERENCE_SCORE_THRESH,
+    "inference_nms_thresh": INFERENCE_NMS_THRESH,
+    "inference_detections_per_img": DETECTIONS_PER_IMG_AFTER_NMS,
+    "pretrained_backbone": True,
+}
+
+# -------- STAGE 1: EFFNET-B0 + FPN + RETINANET -------- #
+STAGE1_RETINANET_DEFAULT_CONFIG = {
+    **COMMON_RETINANET_CONFIG,
+}
+
+# -------- STAGE 2: EFFNET-B0 + FPN + TSM + RETINANET -------- #
+STAGE2_TSM_RETINANET_DEFAULT_CONFIG = {
+    **COMMON_RETINANET_CONFIG,
+    "t_clip": T_CLIP,
+    "tsm_shift_fraction": 0.125,
+    "tsm_shift_mode": "residual",
+    "tsm_effnet_stages_for_tsm": [3, 5, 6],
+    "matcher_high_threshold": 0.5,
+    "matcher_low_threshold": 0.4,
+    "matcher_allow_low_quality": True,
+}
+
+# -------- STAGE 3: THANOS + FPN + RETINANET -------- #
+STAGE3_THANOS_DEFAULT_CONFIG = {
+    **COMMON_RETINANET_CONFIG,
+    "transformer_d_model": FPN_OUT_CHANNELS,
+    "transformer_n_head": 8,
+    "transformer_dim_feedforward": 1024,
+    "transformer_num_spatial_layers": 2,
+    "transformer_num_temporal_layers": 2,
+    "transformer_dropout_rate": 0.1,
+    "fpn_levels_to_process_temporally": ["P3", "P4", "P5"],
+    "max_spatial_tokens_pe": (DEFAULT_HEIGHT // 8) * (DEFAULT_WIDTH // 8),
+    "max_temporal_tokens_pe": T_CLIP,
+}

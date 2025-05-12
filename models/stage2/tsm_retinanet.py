@@ -17,11 +17,8 @@ from torchvision.models.detection.anchor_utils import AnchorGenerator
 
 # Local imports
 from util import log
-from config import NUM_CLASSES
 
-from models.stage1.retinanet import FPNRetinaNet as BaselineRetinaNet  # to get the base configurations
 from models.stage2.tsm_backbone import tsm_efficientnet_b0
-
 
 
 
@@ -30,78 +27,74 @@ class TSMRetinaNet(nn.Module):
     Main wrapper around the EfficientNet-B0 + TSM + RetinaNet architecture
     """
 
-    # We pass these from the Stage 1 baseline model so that they are comparable under the same settings
-    NUM_CLASSES = NUM_CLASSES
-    FPN_OUT_CHANNELS = BaselineRetinaNet.FPN_OUT_CHANNELS
-    ANCHOR_SIZES = BaselineRetinaNet.ANCHOR_SIZES
-    ANCHOR_ASPECT_RATIOS = BaselineRetinaNet.ANCHOR_ASPECT_RATIOS
-
-    SCORE_THRESH = BaselineRetinaNet.SCORE_THRESH
-    NMS_THRESH = BaselineRetinaNet.NMS_THRESH
-
-    FOCAL_LOSS_ALPHA = BaselineRetinaNet.FOCAL_LOSS_ALPHA
-    FOCAL_LOSS_GAMMA = BaselineRetinaNet.FOCAL_LOSS_GAMMA
-
-    DETECTIONS_PER_IMAGE_AFTER_NMS = BaselineRetinaNet.DETECTIONS_PER_IMAGE_AFTER_NMS
-
-
-    def __init__(
-        self,
-        # TSM parameters
-        t_clip: int,
-        shift_fraction: float = 0.125,
-        shift_mode: str = 'residual',
-        tsm_stages_indices: Optional[list[int]] = [3, 5, 6],
-        pretrained_backbone: bool = True,
-
-        # matcher parameters ---
-        matcher_high_threshold: float = 0.5, # RetinaNet default
-        matcher_low_threshold: float = 0.4,  # default
-        matcher_allow_low_quality: bool = True, # default
-    ):
+    def __init__(self, config: dict):
         super().__init__()
+
+        self.num_classes = config["num_classes"]
+        self.score_thresh = config["inference_score_thresh"]
+        self.nms_thresh = config["inference_nms_thresh"]
+        self.detections_per_img = config["inference_detections_per_img"]
+        fpn_out_channels = config["fpn_out_channels"]
+        anchor_sizes = config["anchor_sizes"]
+        anchor_aspect_ratios = config["anchor_aspect_ratios"]
+        focal_loss_alpha = config["focal_loss_alpha"]
+        focal_loss_gamma = config["focal_loss_gamma"]
+        pretrained_backbone = config.get("pretrained_backbone", True)
+
+        self.t_clip = config["t_clip"]
+        shift_fraction = config.get("tsm_shift_fraction", 0.125)
+        shift_mode = config.get("tsm_shift_mode", 'residual')
+        tsm_effnet_stages = config.get("tsm_effnet_stages_for_tsm", [3, 5, 6])
+
+        matcher_high_threshold = config.get("matcher_high_threshold", 0.5)
+        matcher_low_threshold = config.get("matcher_low_threshold", 0.4)
+        matcher_allow_low_quality = config.get("matcher_allow_low_quality", True)
 
 
         log("Initializing TSMRetinaNet with parameters:")
-        log(f"  Num classes: {self.NUM_CLASSES}")
-        log(f"  FPN out channels: {self.FPN_OUT_CHANNELS}")
-        log(f"  Anchor sizes: {self.ANCHOR_SIZES}")
-        log(f"  Anchor aspect ratios: {self.ANCHOR_ASPECT_RATIOS}")
-        log(f"  Score threshold: {self.SCORE_THRESH}")
-        log(f"  NMS threshold: {self.NMS_THRESH}")
-        log(f"  Focal Loss alpha: {self.FOCAL_LOSS_ALPHA}")
-        log(f"  Focal Loss gamma: {self.FOCAL_LOSS_GAMMA}")
+        log(f"  Num classes: {self.num_classes}")
+        log(f"  FPN out channels: {fpn_out_channels}")
+        log(f"  Anchor sizes: {anchor_sizes}")
+        log(f"  Anchor aspect ratios: {anchor_aspect_ratios}")
+        log(f"  Score threshold: {self.score_thresh}")
+        log(f"  NMS threshold: {self.nms_thresh}")
+        log(f"  Focal Loss alpha: {focal_loss_alpha}")
+        log(f"  Focal Loss gamma: {focal_loss_gamma}")
         log(f"  Pretrained backbone: {pretrained_backbone}")
-        log(f"  Detections per image: {self.DETECTIONS_PER_IMAGE_AFTER_NMS}")
-        log(f"  Inserting TSM to internal stages {tsm_stages_indices}")
+        log(f"  Detections per image: {self.detections_per_img}")
+        log(f"  Inserting TSM to internal stages {tsm_effnet_stages}")
 
-        self.t_clip = t_clip
 
         # 1. TSM backbone
         tsm_effnet = tsm_efficientnet_b0(
-            pretrained=pretrained_backbone, time_dim=t_clip, shift_fraction=shift_fraction,
-            shift_mode=shift_mode, tsm_stages_indices=tsm_stages_indices, num_classes=self.NUM_CLASSES
+            pretrained=pretrained_backbone,
+            time_dim=self.t_clip,
+            shift_fraction=shift_fraction,
+            shift_mode=shift_mode,
+            tsm_stages_indices=tsm_effnet_stages,
+            num_classes=self.num_classes
         )
+
         return_layers = {'stage3': '0', 'stage5': '1', 'stage6': '2'}
         self.backbone = IntermediateLayerGetter(tsm_effnet.features, return_layers=return_layers)
 
         # 2. FPN
         fpn_in_channels_list = [40, 112, 192]
-        self.fpn = FeaturePyramidNetwork(in_channels_list=fpn_in_channels_list, out_channels=self.FPN_OUT_CHANNELS)
+        self.fpn = FeaturePyramidNetwork(in_channels_list=fpn_in_channels_list, out_channels=fpn_out_channels)
 
         # 3. anchor generator
-        self.anchor_generator = AnchorGenerator(sizes=self.ANCHOR_SIZES, aspect_ratios=self.ANCHOR_ASPECT_RATIOS)
+        self.anchor_generator = AnchorGenerator(sizes=anchor_sizes, aspect_ratios=anchor_aspect_ratios)
         num_anchors = self.anchor_generator.num_anchors_per_location()[0]
 
         # 4. RetinaNet head
         self.head = RetinaNetHead(
-            in_channels=self.FPN_OUT_CHANNELS,
+            in_channels=fpn_out_channels,
             num_anchors=num_anchors,
-            num_classes=self.NUM_CLASSES
+            num_classes=self.num_classes
         )
 
-        self.head.classification_head.focal_loss_alpha = self.FOCAL_LOSS_ALPHA
-        self.head.classification_head.focal_loss_gamma = self.FOCAL_LOSS_GAMMA
+        self.head.classification_head.focal_loss_alpha = focal_loss_alpha
+        self.head.classification_head.focal_loss_gamma = focal_loss_gamma
 
         # 5. box coder
         self.box_coder = BoxCoder(weights=(1.0, 1.0, 1.0, 1.0))
@@ -199,23 +192,23 @@ class TSMRetinaNet(nn.Module):
             pred_boxes_per_image = self.box_coder.decode_single(box_regression_per_image, anchors_per_image)
             pred_boxes_per_image = box_ops.clip_boxes_to_image(pred_boxes_per_image, image_shape)
 
-            labels_per_image = torch.arange(self.NUM_CLASSES, device=scores_per_image.device)
+            labels_per_image = torch.arange(self.num_classes, device=scores_per_image.device)
             labels_per_image = labels_per_image.view(1, -1).expand_as(scores_per_image)
 
             scores_per_image = scores_per_image.flatten()
             labels_per_image = labels_per_image.flatten()
 
-            pred_boxes_per_image = pred_boxes_per_image.unsqueeze(1).expand(-1, self.NUM_CLASSES, -1)
+            pred_boxes_per_image = pred_boxes_per_image.unsqueeze(1).expand(-1, self.num_classes, -1)
             pred_boxes_per_image = pred_boxes_per_image.reshape(-1, 4)
 
-            inds_to_keep = torch.where((labels_per_image != 0) & (scores_per_image > self.SCORE_THRESH))[0]
+            inds_to_keep = torch.where((labels_per_image != 0) & (scores_per_image > self.score_thresh))[0]
 
             pred_boxes_per_image = pred_boxes_per_image[inds_to_keep]
             scores_per_image = scores_per_image[inds_to_keep]
             labels_per_image = labels_per_image[inds_to_keep]
 
-            keep = box_ops.batched_nms(pred_boxes_per_image, scores_per_image, labels_per_image, self.NMS_THRESH)
-            keep = keep[:self.DETECTIONS_PER_IMAGE_AFTER_NMS]
+            keep = box_ops.batched_nms(pred_boxes_per_image, scores_per_image, labels_per_image, self.nms_thresh)
+            keep = keep[:self.detections_per_img]
 
             final_boxes = pred_boxes_per_image[keep]
             final_scores = scores_per_image[keep]
