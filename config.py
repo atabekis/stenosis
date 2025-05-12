@@ -45,7 +45,7 @@ NUM_WORKERS = get_optimal_workers() if not DEBUG else 4
 
 # -------------- MODEL-SPECIFIC CONTROLS ---------- #
 FOCAL_LOSS_ALPHA = 0.25
-FOCAL_LOSS_GAMMA = 2.0
+FOCAL_LOSS_GAMMA = 3.0
 DETECTIONS_PER_IMG_AFTER_NMS = 1
 
 GIOU_LOSS_COEF = 2.0

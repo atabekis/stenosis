@@ -830,7 +830,7 @@ class DetectionLightningModule(pl.LightningModule):
         return ap.item()
 
 
-    def compute_prf1(self, predictions, targets, iou_threshold=0.5, score_threshold=0.5):
+    def compute_prf1(self, predictions, targets, iou_threshold=0.5, score_threshold=0.25):
         """
         Computes Precision, Recall, and F1 score for the positive class (stenosis, label=1) at given IoU and score thresholds.
         """

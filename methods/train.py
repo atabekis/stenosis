@@ -78,18 +78,18 @@ def train_model(
         filename=model.__class__.__name__ + '-{epoch:02d}-{val_loss:.4f}',
         save_top_k=3,
         verbose=True,
-        monitor='val_loss',
-        mode='min',
+        monitor='val/mAP',
+        mode='max',
         save_on_train_epoch_end=False,
         every_n_epochs=1,
         save_last=True,
     )
 
     early_stop_callback = EarlyStopping(
-        monitor='val_loss',
+        monitor='val/mAP',
         patience=patience,
         verbose=True,
-        mode='min',
+        mode='max',
         log_rank_zero_only=True
     )
 
