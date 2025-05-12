@@ -64,6 +64,9 @@ class DetectionLightningModule(pl.LightningModule):
             # specific params for stage 3
             stem_learning_rate: float = 1e-5,  # differential LR
             # loss params (can be overridden by model-specific losses)
+
+            use_scheduler: bool = True,
+
             focal_alpha: float = FOCAL_LOSS_ALPHA,
             focal_gamma: float = FOCAL_LOSS_GAMMA,
             smooth_l1_beta: float = 1.0 / 9.0,  # common default for smooth L1
@@ -90,6 +93,7 @@ class DetectionLightningModule(pl.LightningModule):
         self.max_epochs = max_epochs
         self.batch_size = batch_size
         self.accumulate_grad_batches = accumulate_grad_batches
+        self.use_scheduler = use_scheduler
         self.stem_learning_rate = stem_learning_rate
         self.focal_alpha = focal_alpha
         self.focal_gamma = focal_gamma
@@ -108,7 +112,7 @@ class DetectionLightningModule(pl.LightningModule):
                              f'metric suffixes: {self.VALID_METRIC_SUFFIXES}')
 
         self._hparams_to_log = hparams_to_log or {}
-        self.save_hyperparameters(ignore=['model', 'normalize_params', 'hparams_to_log'])
+        self.save_hyperparameters(ignore=['model', 'normalize_params'])
 
 
         # ------ initialize metrics -------
@@ -355,12 +359,37 @@ class DetectionLightningModule(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         """The training step needs to explicitly return the losses for logging"""
         images, targets, masks, _ = batch
+
+        # # TODO: REMOVE DEBUG
+        # if self.global_step < 2:  # Log only for the first 2 global steps
+        #     log(f"--- DEBUG: training_step global_step {self.global_step}, batch_idx {batch_idx} ---")
+        #     log(f"Raw images_orig shape: {images.shape}, dtype: {images.dtype}")
+        #     log(f"Raw images_orig stats: min={images.min():.3f}, max={images.max():.3f}, mean={images.mean():.3f}, std={images.std():.3f}")
+        #     log(f"Raw masks_orig shape: {masks.shape}, dtype: {masks.dtype}")
+        #     if targets and targets[0]:  # Check if targets_orig and its first element exist
+        #         log(f"Raw targets_orig[0] sample (first item in batch): {targets[0]}")
+        #     else:
+        #         log(f"Raw targets_orig is empty or first element is empty.")
+        # # TODO: REMOVE DEBUG
+
+
         assert targets is not None, "Targets must be provided during training"
 
         # 1. forward to get losses
         if self.model_stage == 1:
             images = images.squeeze(1) # [B, C, H, W]
             targets = [t[0] for t in targets if t] # list[dict]
+
+        # # TODO: REMOVE DEBUG
+        # if self.global_step < 2 and self.model_stage == 1:
+        #     log(f"Processed images_for_model (Stage 1) shape: {images.shape}, dtype: {images.dtype}")
+        #     if targets:
+        #         log(f"Processed targets_for_model[0] (Stage 1) sample: {targets[0]}")
+        #     else:
+        #         log(f"Processed targets_for_model (Stage 1) is empty.")
+        # # TODO: REMOVE DEBUG
+
+
 
         loss_dict = self.forward(images, targets=targets)
 
@@ -611,8 +640,32 @@ class DetectionLightningModule(pl.LightningModule):
         """
         parameters = []
         if self.model_stage == 3:
-            # TODO: implement
-            raise NotImplementedError(f"Optimizers are not implemented yet for stage {self.model_stage}")
+            log(f'Configuring optimizer for stage {self.model_stage} with differential LRs:')
+            log(f'   Backbone/Stem LR: {self.stem_learning_rate}')
+            log(f'   Main/Transformer/Head LR: {self.learning_rate}')
+
+            backbone_params, other_params = [], []
+
+            for name, param in self.model.named_parameters():
+                if not param.requires_grad:
+                    continue
+                if name.startswith('backbone'):
+                    backbone_params.append(param)
+                else:
+                    other_params.append(param)
+
+            if not backbone_params:
+                log("Warning: No parameters found for 'backbone' prefix. Differential LR might not work as expected.")
+            if not other_params:
+                log("Warning: No parameters found for non-backbone parts. Check model structure.")
+
+            parameters_to_opt = [
+                {'params': backbone_params, 'lr': self.stem_learning_rate, 'name': 'backbone'},
+                {'params': other_params, 'lr': self.learning_rate, 'name': 'transformer_head'}
+            ]
+            parameters = [p for p in parameters_to_opt if p['params']]
+
+
 
         else:
             log(f'Configuring optimizer for stage {self.model_stage} with single LR: {self.learning_rate}')
@@ -624,6 +677,10 @@ class DetectionLightningModule(pl.LightningModule):
             lr=self.learning_rate,
             weight_decay=self.weight_decay,
         )
+
+        if not self.use_scheduler:
+            log("Learning rate scheduler is DISABLED by 'use_scheduler=False'.")
+            return optimizer
 
         # ---- scheduler calculation -----
         warmup_steps = self.warmup_steps
