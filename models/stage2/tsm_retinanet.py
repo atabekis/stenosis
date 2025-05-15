@@ -1,4 +1,4 @@
-# tsm_video_retinanet.py
+# tsm_retinanet.py
 
 # Python import - typing
 from typing import Optional, Union
@@ -40,6 +40,7 @@ class TSMRetinaNet(nn.Module):
         focal_loss_alpha = config["focal_loss_alpha"]
         focal_loss_gamma = config["focal_loss_gamma"]
         pretrained_backbone = config.get("pretrained_backbone", True)
+        use_gradient_checkpointing = config.get("use_gradient_checkpointing", False)
 
         self.t_clip = config["t_clip"]
         shift_fraction = config.get("tsm_shift_fraction", 0.125)
@@ -63,6 +64,7 @@ class TSMRetinaNet(nn.Module):
         log(f"  Pretrained backbone: {pretrained_backbone}")
         log(f"  Detections per image: {self.detections_per_img}")
         log(f"  Inserting TSM to internal stages {tsm_effnet_stages}")
+        log(f"  Gradient checkpointing: {use_gradient_checkpointing}")
 
 
         # 1. TSM backbone
@@ -72,7 +74,8 @@ class TSMRetinaNet(nn.Module):
             shift_fraction=shift_fraction,
             shift_mode=shift_mode,
             tsm_stages_indices=tsm_effnet_stages,
-            num_classes=self.num_classes
+            num_classes=self.num_classes,
+            use_gradient_checkpoint=use_gradient_checkpointing,
         )
 
         return_layers = {'stage3': '0', 'stage5': '1', 'stage6': '2'}

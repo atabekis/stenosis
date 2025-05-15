@@ -11,11 +11,11 @@ from typing import Any, Callable, Optional, Sequence
 # Torch imports
 import torch
 from torch import nn, Tensor
+from torch.utils.checkpoint import checkpoint
 from torch.hub import load_state_dict_from_url
 from torchvision.models._utils import _make_divisible
 from torchvision.ops.stochastic_depth import StochasticDepth
 from torchvision.ops.misc import Conv2dNormActivation, SqueezeExcitation
-
 
 # Local imports
 from .temporal_shift import TemporalShift
@@ -74,7 +74,8 @@ class TemporalMBConvBlock(nn.Module):
         # --- TSM Specific Args ---
         time_dim: int = 1, # Sequence length T
         shift_fraction: float = 0.0,
-        shift_mode: str = 'residual'
+        shift_mode: str = 'residual',
+        use_gradient_checkpointing: bool = False,
     ) -> None:
         super().__init__()
 
@@ -95,6 +96,7 @@ class TemporalMBConvBlock(nn.Module):
         if self.use_tsm:
              self.temporal_shift = TemporalShift(self.shift_fraction, self.shift_mode)
 
+        self.use_gradient_checkpointing = use_gradient_checkpointing
 
         # expansion phase
         expanded_channels = cnf.adjust_channels(cnf.input_channels, cnf.expand_ratio)
@@ -132,22 +134,44 @@ class TemporalMBConvBlock(nn.Module):
         self.stochastic_depth = StochasticDepth(stochastic_depth_prob, "row")
         self.out_channels = cnf.out_channels
 
-    def forward(self, input: Tensor) -> Tensor:  # [B*T, C, H, W]
-        if self.use_tsm:  # reshape -> apply TSM -> reshape back
-             B_T, C, H, W = input.shape
-             B = B_T // self.time_dim
+    # def forward(self, input: Tensor) -> Tensor:
+    #     if self.use_tsm:
+    #          B_T, C, H, W = input.shape
+    #          B = B_T // self.time_dim
+    #
+    #          input_reshaped = input.view(B, self.time_dim, C, H, W)
+    #          shifted_input = self.temporal_shift(input_reshaped)
+    #          input = shifted_input.view(B_T, C, H, W)
+    #
+    #     result = self.block(input)
+    #
+    #     if self.use_res_connect:  # residual connection adds results back onto the input
+    #         result = self.stochastic_depth(result)
+    #         result += input
+    #
+    #     return result
 
-             input_reshaped = input.view(B, self.time_dim, C, H, W) #[B, T, C, H, W]
-             shifted_input = self.temporal_shift(input_reshaped)
-             input = shifted_input.view(B_T, C, H, W)  # [B*T, C, H, W]
+    def forward(self, current_input: Tensor) -> Tensor:  # [B*T, C, H, W]
+        input_to_mb_ops = current_input
+        if self.use_tsm: # reshape -> apply TSM -> reshape back
+            B_T, C_local, H_local, W_local = current_input.shape
+            B = B_T // self.time_dim
 
-        result = self.block(input)
+            input_reshaped = current_input.view(B, self.time_dim, C_local, H_local, W_local) #[B, T, C, H, W]
+            shifted_input_btchw = self.temporal_shift(input_reshaped).view(B_T, C_local, H_local, W_local) # [B*T, C, H, W]
+            input_to_mb_ops = shifted_input_btchw
 
-        if self.use_res_connect:  # residual connection adds results back onto the input
-            result = self.stochastic_depth(result)
-            result += input
+        if self.training and self.use_gradient_checkpointing:
+            block_output = checkpoint(self._block_forward_for_checkpoint, input_to_mb_ops, use_reentrant=False)
+        else:
+            block_output = self.block(input_to_mb_ops)
 
-        return result
+        if self.use_res_connect:
+            final_output = self.stochastic_depth(block_output) + input_to_mb_ops
+        else:
+            final_output = block_output
+
+        return final_output
 
 
 
@@ -165,6 +189,7 @@ class TSMEfficientNet(nn.Module):
         shift_fraction: float = 0.0,
         shift_mode: str = 'inplace',
         tsm_stages: Optional[list[int]] = None,
+        use_gradient_checkpointing: bool = False,
     ) -> None:
         """
         TSM_EfficientNet V1 architecture.
@@ -227,7 +252,8 @@ class TSMEfficientNet(nn.Module):
                     norm_layer,
                     time_dim=time_dim,
                     shift_fraction=stage_shift_fraction,
-                    shift_mode=shift_mode
+                    shift_mode=shift_mode,
+                    use_gradient_checkpointing=use_gradient_checkpointing
                 )
                 stage_block_id += 1
             layers[f"stage{current_stage_idx}"] = nn.Sequential(stage)
@@ -386,6 +412,7 @@ def tsm_efficientnet_b0(
     shift_fraction: float = 0.0,
     shift_mode: str = 'residual',
     tsm_stages_indices: Optional[list[int]] = None, #[3, 5, 6]
+    use_gradient_checkpoint: bool = False,
     **kwargs: Any
 ) -> TSMEfficientNet:
     """
@@ -404,6 +431,7 @@ def tsm_efficientnet_b0(
         shift_fraction=shift_fraction,
         shift_mode=shift_mode,
         tsm_stages=tsm_stages_internal,
+        use_gradient_checkpointing=use_gradient_checkpoint,
         **kwargs
     )
 

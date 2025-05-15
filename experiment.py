@@ -54,6 +54,7 @@ BASE_CONFIG_SINGLE_GPU = {
     'debug': DEBUG,
     'dataset_dir': CADICA_DATASET_DIR,
     'log_dir': LOGS_DIR,
+    'num_log_val_images': 2,
 }
 
 BASE_CONFIG_MULTI_GPU = {
@@ -391,6 +392,7 @@ class Experiment:
                 'pretrained',
                 'max_epochs',
                 'batch_size',
+                'accumulate_grad_batches',
                 'effective_batch_size',
                 'effective_batch_size_achieved',
                 'learning_rate',
@@ -488,8 +490,9 @@ if __name__ == "__main__":
 
     # Model-specific: Stages 2, 3
     parser.add_argument("--t_clip", type=int, default=T_CLIP)
-    parser.add_argument("--tsm_shift_fraction", type=int, default=0.125)
+    parser.add_argument("--tsm_shift_fraction", type=float, default=0.125)
     parser.add_argument("--tsm_shift_mode", type=str, choices=["residual","inplace"], default="residual")
+    parser.add_argument("--use_grad_ckpt", action=argparse.BooleanOptionalAction, default=False)
 
     # Paths
     parser.add_argument("--dataset_dir", type=str, default=CADICA_DATASET_DIR)
