@@ -45,22 +45,23 @@ NUM_WORKERS = get_optimal_workers() if not DEBUG else 4
 
 # -------------- MODEL-SPECIFIC CONTROLS ---------- #
 FOCAL_LOSS_ALPHA = 0.25
-FOCAL_LOSS_GAMMA = 3.0
-DETECTIONS_PER_IMG_AFTER_NMS = 1
+FOCAL_LOSS_GAMMA = 1.5
+DETECTIONS_PER_IMG_AFTER_NMS = 20
 
 GIOU_LOSS_COEF = 2.0
 L1_LOSS_COEF = 5.0
 CLS_LOSS_COEF = 2.0
 
 # DEFAULTS
-DEFAULT_ANCHOR_SIZES = ((8, 11, 16), (22, 32, 45), (64, 90, 128))
-# DEFAULT_ANCHOR_SIZES = ((16, 24, 32), (48, 64, 96), (128, 192, 256))
+# DEFAULT_ANCHOR_SIZES = ((8, 11, 16), (22, 32, 45), (64, 90, 128))
+DEFAULT_ANCHOR_SIZES = ((16, 24, 32), (48, 64, 96), (128, 192, 256))
 DEFAULT_ANCHOR_ASPECT_RATIOS = ((0.5, 1.0, 2.0),) * len(DEFAULT_ANCHOR_SIZES)
 
 FPN_OUT_CHANNELS = 256
 
 INFERENCE_SCORE_THRESH = 0.1
 INFERENCE_NMS_THRESH = 0.4
+PRF1_THRESH = 0.1
 
 # -------- SHARED BASE CONFIG -------- #
 COMMON_RETINANET_CONFIG = {
@@ -88,9 +89,10 @@ STAGE2_TSM_RETINANET_DEFAULT_CONFIG = {
     "tsm_shift_fraction": 0.125,
     "tsm_shift_mode": "residual",
     "tsm_effnet_stages_for_tsm": [3, 5, 6],
-    "matcher_high_threshold": 0.5,
-    "matcher_low_threshold": 0.4,
+    "matcher_high_threshold": 0.4,
+    "matcher_low_threshold": 0.3,
     "matcher_allow_low_quality": True,
+    "use_gradient_checkpointing": False
 }
 
 # -------- STAGE 3: THANOS + FPN + RETINANET -------- #

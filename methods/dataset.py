@@ -357,7 +357,7 @@ class XCADataset(Dataset):
         metadata = {
             'patient_id': img.patient_id,
             'video_id': img.video_id,
-            'frane_nr': img.frame_nr
+            'frame_nr': img.frame_nr
         }
 
         return frame.unsqueeze(0), [target], mask, metadata  # unsqueeze the tensor for consistency [1, C, H, W]

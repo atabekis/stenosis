@@ -29,6 +29,7 @@ from config import (
     L1_LOSS_COEF,
     CLS_LOSS_COEF,
     POSITIVE_CLASS_ID,
+    PRF1_THRESH,
     CLASSES
 )
 
@@ -830,7 +831,7 @@ class DetectionLightningModule(pl.LightningModule):
         return ap.item()
 
 
-    def compute_prf1(self, predictions, targets, iou_threshold=0.5, score_threshold=0.25):
+    def compute_prf1(self, predictions, targets, iou_threshold=0.5, score_threshold=PRF1_THRESH):
         """
         Computes Precision, Recall, and F1 score for the positive class (stenosis, label=1) at given IoU and score thresholds.
         """
@@ -883,7 +884,7 @@ class DetectionLightningModule(pl.LightningModule):
                 best_iou, best_gt_idx = overlap_values.max(dim=0)
                 if best_iou >= iou_threshold and not gt_matched[best_gt_idx]:
                     gt_matched[best_gt_idx] = True
-                    pred_matched_to_gt[best_gt_idx] = True
+                    pred_matched_to_gt[pred_idx] = True
                     tp_ious.append(best_iou.item())
 
 

@@ -75,7 +75,7 @@ def train_model(
     logger = TensorBoardLogger(save_dir=log_dir, name=experiment_name)
 
     checkpoint_callback = ModelCheckpoint(
-        filename=model.__class__.__name__ + '-{epoch:02d}-{val_loss:.4f}',
+        filename=model.__class__.__name__ + '-{epoch:02d}-{map:.4f}',
         save_top_k=3,
         verbose=True,
         monitor='val/mAP',
