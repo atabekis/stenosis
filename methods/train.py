@@ -102,7 +102,8 @@ def train_model(
         patience=patience,
         verbose=True,
         mode='max',
-        log_rank_zero_only=True
+        log_rank_zero_only=True,
+        check_finite=True,
     )
 
 

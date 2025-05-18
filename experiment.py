@@ -117,7 +117,7 @@ class Experiment:
         if cfg['model_stage'] not in (1, 2, 3):
             raise ValueError(f"Invalid model_stage: {cfg['model_stage']}. Must be 1, 2, or 3.")
 
-        if cfg['model_stage'] == 1 and cfg['dataset_dir'].upper() == 'BOTH':
+        if cfg['model_stage'] == 1 and str(cfg['dataset_dir']).upper() == 'BOTH':
             raise NotImplementedError('Using both datasets for Stage 1 is not implemented.')
 
         # if profiler is on but no schedule, fill in default
@@ -492,10 +492,6 @@ if __name__ == "__main__":
     parser.add_argument("--profile", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--repeat_channels", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--deterministic", action=argparse.BooleanOptionalAction, default=False)
-
-    # # Model-specific: RetinaNet
-    # parser.add_argument("--focal_alpha", type=float, default=0.25)
-    # parser.add_argument("--focal_gamma", type=float, default=2.0)
 
     # Model-specific: Stages 2, 3
     parser.add_argument("--t_clip", type=int, default=T_CLIP)

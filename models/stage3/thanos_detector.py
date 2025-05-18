@@ -183,8 +183,8 @@ class THANOSDetector(nn.Module):
 
         if not features_for_head:
             if self.training:
-                return {"classification_loss": torch.tensor(0.0, device=videos_batch.device, requires_grad=True),
-                        "bbox_regression_loss": torch.tensor(0.0, device=videos_batch.device, requires_grad=True)}
+                return {"classification": torch.tensor(0.0, device=videos_batch.device, requires_grad=True),
+                        "bbox_regression": torch.tensor(0.0, device=videos_batch.device, requires_grad=True)}
             else:
                 return [{"boxes": torch.empty((0, 4), device=videos_batch.device),
                          "scores": torch.empty((0,), device=videos_batch.device),
@@ -233,8 +233,8 @@ class THANOSDetector(nn.Module):
             )
 
             return {
-                "classification_loss": losses_from_head["classification"],
-                "bbox_regression_loss": losses_from_head["bbox_regression"],
+                "classification": losses_from_head["classification"],
+                "bbox_regression": losses_from_head["bbox_regression"],
             }
         else:  # inference
             image_shapes_flat_for_postprocess = [(H_in, W_in)] * (B * T_clip)
