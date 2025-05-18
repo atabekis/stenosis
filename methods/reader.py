@@ -13,21 +13,24 @@ import pandas as pd
 import concurrent.futures
 
 from typing import Union
-from pathlib import WindowsPath
+from pathlib import WindowsPath, Path
 
 import config
 # Local imports
 from util import log
 from config import DEBUG, DEBUG_SIZE, DEFAULT_WIDTH, DEFAULT_HEIGHT, T_CLIP
 from config import DANILOV_DATASET_DIR, DANILOV_DATASET_PATH, CADICA_DATASET_DIR
+from config import CADICA_NEGATIVE_ONLY_ON_BOTH
 
 
 class Reader:
     """
     Reads the dataset directory, finds all .bmp + .xml pairs, and constructs XCAImage objects
     """
-    def __init__(self, dataset_dir, debug=DEBUG) -> None:
-        self.dataset_dir = dataset_dir
+    def __init__(self, dataset_dir=None, debug=DEBUG, cadica_negative_only=CADICA_NEGATIVE_ONLY_ON_BOTH) -> None:
+        self.dataset_dir = dataset_dir # can be path to CADICA, DANILOV or BOTH
+        self.cadica_negative_only = cadica_negative_only
+
         self.xca_images = []
 
         self._which_dataset()
@@ -40,41 +43,49 @@ class Reader:
 
     def _which_dataset(self):
         self.dataset_type = 'DANILOV' if 'DANILOV' in str(self.dataset_dir) else 'CADICA'
-        self.dataset_path = self.dataset_dir / 'dataset' if self.dataset_type == 'DANILOV' else None
 
-        if self.dataset_type == 'DANILOV':
-            self._load_danilov()
-        elif self.dataset_type == 'CADICA':
-            self._load_cadica()
+        if 'DANILOV' in str(self.dataset_dir).upper():
+            self.dataset_type = 'DANILOV'
+            self.xca_images = self._load_danilov(self.dataset_dir)
+        elif 'CADICA' in str(self.dataset_dir).upper():
+            self.dataset_type = 'CADICA'
+            self.xca_images = self._load_cadica(self.dataset_dir, negative_only=False)
+        elif self.dataset_dir.upper() == 'BOTH':
+            self._load_both(self.cadica_negative_only)
 
-    def _load_danilov(self) -> None:
+
+
+    def _load_danilov(self, dataset_dir) -> list['XCAImage']:
         """
         Loads the dataset from the merged CSV file, groups by filename to
         handle multiple bounding boxes per image, then constructs XCAImage objects.
         """
-        df = self._merge_labels()
+        df = self._merge_labels(dataset_dir)
 
         # Group by filename, for possible multiple bounding boxes per image
         groups = df.groupby("filename")
         log("Building XCA images from CSV files using the Danilov dataset.")
 
+        data_path = Path(dataset_dir) / 'dataset' if 'DANILOV' in str(dataset_dir).upper() else dataset_dir
+
         def build_xca_image(filename, group):
-            return XCAImage.from_danilov(group, self.dataset_path)
+            return XCAImage.from_danilov(group, data_path)
 
         with concurrent.futures.ThreadPoolExecutor() as executor:
             results = list(executor.map(lambda item: build_xca_image(item[0], item[1]), groups))
-        self.xca_images = results
+
+        return [img for img in results if img is not None]
 
 
-    def _load_cadica(self) -> None:
+    def _load_cadica(self, dataset_dir, negative_only=False) -> list['XCAImage']:
         """
         Load the CADICA dataset, only the selected frames are extracted from the data (i.e., only where the contrast
         agent is visible.
         Only the selectedVideos directory is used due to the same constraints.
         """
-        base_dir = self.dataset_dir / 'selectedVideos'
+        base_dir = dataset_dir / 'selectedVideos'
         if not base_dir.is_dir():
-            raise FileNotFoundError(f"No 'selectedVideos' folder in {self.dataset_dir}")
+            raise FileNotFoundError(f"No 'selectedVideos' folder in {dataset_dir}")
 
         tasks = []
         patients = sorted(base_dir.iterdir(), key=lambda p: int(p.name.lstrip('p')))
@@ -106,6 +117,11 @@ class Reader:
                             gt_path = gt_dir / f"{fn}.txt"
                             if gt_path.exists():
                                 ann = gt_path.read_text()
+
+                        is_positive = ann is not None and any(char.isdigit() for char in ann.split()[:4])
+                        if negative_only and is_positive:
+                            continue  # pass the positive examples
+
                         tasks.append((img_path, ann))
 
         def _make_image(task):
@@ -120,21 +136,34 @@ class Reader:
         with concurrent.futures.ThreadPoolExecutor() as executor:
             results = executor.map(_make_image, tasks)
 
-        self.xca_images = [img for img in results if img is not None]
+        return [img for img in results if img is not None]
 
 
+    def _load_both(self, cadica_negative_only):
+        self.xca_images = []  # fresh start
+        self.dataset_type = 'BOTH'
+        log(f'Loading both datasets. CADICA negative samples only: {self.cadica_negative_only}')
 
-    def _merge_labels(self) -> pd.DataFrame:
+        danilov_images = self._load_danilov(DANILOV_DATASET_DIR)
+        self.xca_images.extend(danilov_images)
+        log(f'Loaded {len(danilov_images)} images from DANILOV.')
+
+        cadica_images = self._load_cadica(CADICA_DATASET_DIR, negative_only=cadica_negative_only)
+        self.xca_images.extend(cadica_images)
+        log(f'Loaded {len(cadica_images)} images from CADICA.')
+
+
+    def _merge_labels(self, dataset_dir) -> pd.DataFrame:
         """
         Check if train_labels.csv & test_labels.csv are merged → labels.csv. Used for the DANILOV dataset
         """
-        labels_csv = os.path.join(self.dataset_dir, 'labels.csv')
+        labels_csv = os.path.join(dataset_dir, 'labels.csv')
         if os.path.exists(labels_csv):
             df = pd.read_csv(labels_csv)
             log(f"Merged dataset found at {labels_csv}. Loading merged dataset")
             return df
         else:
-            train, test = os.path.join(self.dataset_dir, 'train_labels.csv'), os.path.join(self.dataset_dir, 'test_labels.csv')
+            train, test = os.path.join(dataset_dir, 'train_labels.csv'), os.path.join(dataset_dir, 'test_labels.csv')
             train_df, test_df = pd.read_csv(train), pd.read_csv(test)
             df = pd.concat([train_df, test_df], ignore_index=True)
             df.sort_values('filename', inplace=True)
@@ -203,7 +232,7 @@ class Reader:
         videos_dict = defaultdict(list)
         # first we group images by pid, vid
         for image in self.xca_images:
-            key = (image.patient_id, image.video_id)
+            key = (image.dataset ,image.patient_id, image.video_id)
             videos_dict[key].append(image)
 
         for key in videos_dict:
@@ -212,7 +241,7 @@ class Reader:
         # videos = []
 
         def process_video(key_frames):
-            (patient_id, video_id), frames = key_frames
+            (dataset_source, patient_id, video_id), frames = key_frames
             frame_count = len(frames)
 
             frames_array = np.zeros((frame_count, 1, default_width, default_height), dtype=np.uint8)  # all images to be resized to 512x512
@@ -262,7 +291,14 @@ class Reader:
                             bboxes_array[i] = np.array(frame.bbox)
 
                 frames_array[i, 0] = img
-            video = XCAVideo(patient_id, video_id, frames_array, bboxes_array, original_dimensions)
+            video = XCAVideo(
+                patient_id=patient_id,
+                video_id=video_id,
+                frames=frames_array,
+                bboxes=bboxes_array,
+                original_dimensions=original_dimensions,
+                dataset=dataset_source
+            )
 
             for frame in frames:
                 if frame.stenosis_severity is not None:
@@ -276,11 +312,11 @@ class Reader:
 
         log(f'Reader constructed {len(videos)} total videos.')
 
-        return sorted(videos, key=lambda v: (v.patient_id, v.video_id))
+        return sorted(videos, key=lambda v: (v.dataset, v.patient_id, v.video_id))
 
 
     def __repr__(self):
-        return f"Reader(dataset_path='{self.dataset_path}', total_images={len(self.xca_images)})"
+        return f"Reader(dataset='{self.dataset_type}', total_images={len(self.xca_images)})"
 
 
 
@@ -304,14 +340,17 @@ class XCAImage:
         Initialize an XCAImage instance
         """
         self.filename = None
+        self.path = None
+
         self.patient_id, self.video_id, self.frame_nr = None, None, None
-        self.width, self.height = None, None
+
+        self.original_width, self.original_height = None, None
+        self.width, self.height = DEFAULT_WIDTH, DEFAULT_HEIGHT
+
         self.bbox = []
         self.stenosis_severity = None  # p0_20 = 0% to 20% stenosis, p20_50 = ...  only in CADICA
 
-        self.path = None
         self.image = None
-
         self.dataset = None
 
 
@@ -412,10 +451,10 @@ class XCAVideo:
     """
     Represents a sequence of consequent XCAImage instances from the same patient and video
     """
-    def __init__(self, patient_id, video_id, frames, bboxes, original_dimensions=None):
+    def __init__(self, patient_id, video_id, frames, bboxes, dataset, original_dimensions=None):
         self.patient_id, self.video_id = patient_id, video_id
         self.frames, self.bboxes = frames, bboxes  # frames=[frame_count, 1, width, height], bboxes=[frame_count, 4] or None
-
+        self.dataset = dataset
         self.frame_count = frames.shape[0]
         self.has_lesion = bboxes is not None
         self.original_dimensions = original_dimensions
@@ -426,18 +465,20 @@ class XCAVideo:
         shape_str = f"{self.frames.shape[2]}x{self.frames.shape[3]}"
         return (f"XCAVideo(patient_id={self.patient_id}, video_id={self.video_id}, "
                 f"frame_count={self.frame_count}, shape={shape_str}, has_lesion={self.has_lesion}, "
-                f"stenosis_severity={self.stenosis_severity})")
+                f"stenosis_severity={self.stenosis_severity}, dataset={self.dataset})")
 
 
 
 
 
 if __name__ == "__main__":
-    reader = Reader(dataset_dir=CADICA_DATASET_DIR)
-    # print(len(reader.xca_images))
+    reader = Reader(dataset_dir='both', cadica_negative_only=True)
+    print(len(reader.xca_images))
     videos = reader.construct_videos()
-    images = reader.xca_images
-    print(len(images))
+    for v in videos:
+        print(v)
+    # images = reader.xca_images
+    # print(len(images))
 
 
 
