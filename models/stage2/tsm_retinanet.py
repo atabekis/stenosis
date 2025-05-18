@@ -40,7 +40,7 @@ class TSMRetinaNet(nn.Module):
         focal_loss_alpha = config["focal_loss_alpha"]
         focal_loss_gamma = config["focal_loss_gamma"]
         pretrained_backbone = config.get("pretrained_backbone", True)
-        use_gradient_checkpointing = config.get("use_gradient_checkpointing", False)
+        use_gradient_checkpointing = config.get("use_grad_ckpt", False)
 
         self.t_clip = config["t_clip"]
         shift_fraction = config.get("tsm_shift_fraction", 0.125)
