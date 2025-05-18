@@ -381,20 +381,21 @@ class XCADataset(Dataset):
         }
         return clip_tensor, processed_targets, mask, metadata
 
-    def _fetch_image(self, img: 'XCAImage'):
-        if not isinstance(img, XCAImage):
-            raise TypeError(f"Expected XCAImage, got {type(img)}")
 
-        raw_image_arr = img.image
+    def _fetch_image(self, img: 'XCAImage'):
+
         raw_bbox_data = getattr(img, "bbox", None)
 
         if raw_bbox_data is not None and not isinstance(raw_bbox_data, np.ndarray):
-            log(f"Warning: Bbox for image {img.patient_id}/{img.video_id}/{img.frame_nr} is not np.ndarray ({type(raw_bbox_data)}). Treating as None.")
-            raw_bbox_data = None
+            try:
+                raw_bbox_data = np.array(raw_bbox_data, dtype=np.float32)
+            except Exception as e:
+                raise RuntimeError(f"Failed to convert bbox data to np.ndarray {e}")
+
         elif raw_bbox_data is not None and raw_bbox_data.size == 0:
             raw_bbox_data = None
 
-        frame_tensor, aug_bbox = self._process_frame(raw_image_arr, raw_bbox_data, video_uid=None)
+        frame_tensor, aug_bbox = self._process_frame(img.image, raw_bbox_data, video_uid=None)
         target = self._get_target_dict(aug_bbox)
 
         mask = torch.ones((1,), dtype=torch.bool)
@@ -406,13 +407,11 @@ class XCADataset(Dataset):
         }
         return frame_tensor.unsqueeze(0), [target], mask, metadata
 
+
     def __len__(self):
         return len(self.data_list)
 
     def __getitem__(self, idx):
-        # if not (0 <= idx < len(self.data_list)):
-        #     raise IndexError(f'Index {idx} out of range for dataset of size {len(self.data_list)}')
-
         item = self.data_list[idx]
         if self.using_video_format:
             return self._fetch_video_clip(item)
