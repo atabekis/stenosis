@@ -60,7 +60,7 @@ class XCADataModule(pl.LightningDataModule):
 
 
         self.using_video_format = isinstance(data_list[0], XCAVideo) if data_list else True
-        self.t_clip = t_clip if self.using_video_format else 1  # also done in dataset.py, but can never be to sure lol
+        self.t_clip = t_clip if self.using_video_format else 1  # also done in dataset.py, but can never be too sure lol
 
         self.train_data, self.val_data, self.test_data = None, None, None
         self.train_dataset, self.val_dataset, self.test_dataset = None, None, None
