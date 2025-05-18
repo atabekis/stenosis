@@ -160,7 +160,7 @@ class XCADataset(Dataset):
 
         return {'mean': float(mean), 'std': std}
 
-    def _apply_augment(self, arr: np.ndarray, bboxes: List[list[float]], category_ids: List[int],
+    def _apply_augment(self, arr: np.ndarray, bboxes: list[list[float]], category_ids: list[int],
                        video_uid: Optional[tuple]):
         if not (self.use_augmentation and self.augment_transform):
             return arr, bboxes
