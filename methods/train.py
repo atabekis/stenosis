@@ -2,6 +2,7 @@
 
 # Pyton imports
 import os
+import sys
 from pathlib import Path
 from typing import List, Optional, Union
 
@@ -16,8 +17,7 @@ from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 
 # Local imports
 from util import log
-from config import LOGS_DIR
-
+from config import LOGS_DIR, TEST_MODEL_ON_KEYBOARD_INTERRUPT
 
 
 def train_model(
@@ -37,6 +37,7 @@ def train_model(
         profiler_enabled: bool = False,
         profiler_scheduler_conf: Optional[dict] = None,
 
+        resume_from_ckpt_path: Optional[str] = None,
         testing_ckpt_path:Optional[str] = None,
 ):
     """
@@ -64,22 +65,33 @@ def train_model(
     enable_pbar = not "SLURM_JOB_ID" in os.environ
 
     experiment_name_core = model.__class__.__name__
-    if testing_ckpt_path:
-        experiment_folder_suffix = 'test_only'
-    else:
-        experiment_folder_suffix = 'augmented' if use_augmentation else 'unaugmented'
+
+    if testing_ckpt_path: experiment_folder_suffix = 'test_only'
+    elif resume_from_ckpt_path: experiment_folder_suffix = 'resumed_training'
+    else: experiment_folder_suffix = 'augmented' if use_augmentation else 'unaugmented'
 
 
     experiment_name = f'{experiment_name_core}/{experiment_folder_suffix}'
 
     logger = TensorBoardLogger(save_dir=log_dir, name=experiment_name)
 
-    checkpoint_callback = ModelCheckpoint(
-        filename=model.__class__.__name__ + '-{epoch:02d}-{map:.4f}',
+    checkpoint_callback_map = ModelCheckpoint(
+        filename=model.__class__.__name__ + '-{epoch:02d}-{val/mAP:.4f}',
         save_top_k=3,
         verbose=True,
         monitor='val/mAP',
         mode='max',
+        save_on_train_epoch_end=False,
+        every_n_epochs=1,
+        save_last=True,
+    )
+
+    checkpoint_callback_val = ModelCheckpoint(
+        filename=model.__class__.__name__ + '-{epoch:02d}-{val_loss:.4f}',
+        save_top_k=1,
+        verbose=True,
+        monitor='val_loss',
+        mode='min',
         save_on_train_epoch_end=False,
         every_n_epochs=1,
         save_last=True,
@@ -115,7 +127,7 @@ def train_model(
     trainer_kwargs = {
         'max_epochs': max_epochs,
         'gradient_clip_val': gradient_clip_val,
-        'callbacks': [checkpoint_callback, early_stop_callback, ],
+        'callbacks': [checkpoint_callback_map, checkpoint_callback_val, early_stop_callback, ],
         'logger': logger,
         'log_every_n_steps': 10,
         'deterministic': deterministic,
@@ -156,6 +168,8 @@ def train_model(
 
     trainer = pl.Trainer(**trainer_kwargs)
 
+    checkpoint_callback = checkpoint_callback_map  # TODO: add control between two callbacks
+
     results_dict =  {
         "trainer": trainer,
         "logger": logger,
@@ -167,7 +181,16 @@ def train_model(
         trainer.test(lightning_module, datamodule=data_module, ckpt_path=testing_ckpt_path)
         results_dict["tested_checkpoint_path"] = testing_ckpt_path
     else:
-        trainer.fit(lightning_module, data_module)
+
+        try:
+            log(f'Starting training. Resuming from checkpoint: {True if resume_from_ckpt_path else False}')
+            trainer.fit(lightning_module, data_module, ckpt_path=resume_from_ckpt_path)
+        except KeyboardInterrupt:
+            if TEST_MODEL_ON_KEYBOARD_INTERRUPT:
+                log(f'Keyboard interrupt received. Testing model (best).')
+                trainer.test(lightning_module, datamodule=checkpoint_callback.best_model_path)
+            else:
+                sys.exit(1)
 
         ckpt_to_test = checkpoint_callback.best_model_path
         if not ckpt_to_test:

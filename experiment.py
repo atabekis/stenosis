@@ -30,8 +30,10 @@ from config import (
     DEFAULT_HEIGHT, DEFAULT_WIDTH,
     TRAIN_SIZE, VAL_SIZE, TEST_SIZE,
     NUM_CLASSES, POSITIVE_CLASS_ID, FOCAL_LOSS_ALPHA, FOCAL_LOSS_GAMMA, T_CLIP,
-    STAGE1_RETINANET_DEFAULT_CONFIG, STAGE2_TSM_RETINANET_DEFAULT_CONFIG, STAGE3_THANOS_DEFAULT_CONFIG
+    STAGE1_RETINANET_DEFAULT_CONFIG, STAGE2_TSM_RETINANET_DEFAULT_CONFIG, STAGE3_THANOS_DEFAULT_CONFIG,
+    TEST_MODEL_ON_KEYBOARD_INTERRUPT,
 )
+
 
 # --- Default base configs ---
 
@@ -43,9 +45,10 @@ BASE_CONFIG_SINGLE_GPU = {
     'strategy': None,
     'learning_rate': 1e-4,
     'weight_decay': 1e-4,
+    'gradient_clip_val': 1.0,
     'warmup_steps': 100,
     'use_scheduler': True,
-    'patience': 10,
+    'patience': 25,
     'normalize_params': DEFAULT_NORMALIZE_PARAMS,
     'precision': '16-mixed',
     'repeat_channels': True,
@@ -76,7 +79,7 @@ warnings.filterwarnings("ignore", message=r"Detected call of `lr_scheduler.step\
 
 def setup_reproducibility(seed, deterministic):
     """Seed everything and toggle CUDNN deterministic/benchmark modes."""
-    pl.seed_everything(seed)
+    pl.seed_everything(seed, workers=True)
     torch.backends.cudnn.deterministic = deterministic
     torch.backends.cudnn.benchmark = not deterministic
 
@@ -103,7 +106,7 @@ class Experiment:
     def _validate_config(self):
         """Ensure configuration keys are present and valid."""
         cfg = self.config
-        required_keys = ['model_stage', 'max_epochs', 'effective_batch_size', 'gpus']
+        required_keys = ['model_stage', 'max_epochs', 'effective_batch_size']
 
         if not cfg.get('test_model_path'):
             for key in required_keys:
@@ -113,6 +116,9 @@ class Experiment:
         # model_stage must be 1, 2, or 3
         if cfg['model_stage'] not in (1, 2, 3):
             raise ValueError(f"Invalid model_stage: {cfg['model_stage']}. Must be 1, 2, or 3.")
+
+        if cfg['model_stage'] == 1 and cfg['dataset_dir'].upper() == 'BOTH':
+            raise NotImplementedError('Using both datasets for Stage 1 is not implemented.')
 
         # if profiler is on but no schedule, fill in default
         if cfg.get('profiler_enabled') and 'profiler_scheduler_conf' not in cfg:
@@ -131,6 +137,8 @@ class Experiment:
         torch.set_float32_matmul_precision('high')
 
         os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+
+        os.environ['NO_ALBUMENTATIONS_UPDATE'] = '1'  # to suppress the annoying updates
 
 
     def _determine_devices_and_strategy(self):
@@ -337,12 +345,20 @@ class Experiment:
             'seed': cfg.get('seed'),
             'num_target_gpus': cfg.get('num_target_gpus'),
             'strategy': str(cfg.get('strategy')),
+            'dataset_dir': os.path.basename(str(cfg.get('dataset_dir'))),
         }
 
-        if cfg['model_stage'] == 1 or cfg['model_stage'] == 2 or cfg['model_stage'] == 3:  # common params
+        if cfg.get('resume_from_ckpt'):
+            hparams_to_log['resumed_from_ckpt'] = os.path.basename(cfg['resume_from_ckpt'])
+        if cfg.get('test_model_path'):
+            hparams_to_log['tested_ckpt'] = os.path.basename(cfg['test_model_path'])
+
+
+        if cfg['model_stage'] in [1, 2, 3]:
             hparams_to_log['focal_alpha'] = cfg.get('focal_loss_alpha')
             hparams_to_log['focal_gamma'] = cfg.get('focal_loss_gamma')
-            hparams_to_log['anchor_sizes_p3_first'] = str(cfg.get('anchor_sizes', [(0,)])[0][0])  # log first anchor of P3
+            hparams_to_log['anchor_sizes_p3_first'] = str(
+                cfg.get('anchor_sizes', STAGE1_RETINANET_DEFAULT_CONFIG['anchor_sizes'])) # should always be passed to here
 
         if cfg['model_stage'] == 2:
             hparams_to_log['tsm_shift_fraction'] = cfg.get('tsm_shift_fraction')
@@ -386,27 +402,19 @@ class Experiment:
     def _print_config_summary(self):
         log('---- Configuration Summary ----')
         for key in (
-                'debug',
-                'profiler_enabled',
-                'model_stage',
-                'pretrained',
-                'max_epochs',
-                'batch_size',
-                'accumulate_grad_batches',
-                'effective_batch_size',
-                'effective_batch_size_achieved',
-                'learning_rate',
-                'use_augmentation',
-                'weight_decay',
-                'warmup_steps',
-                'normalize_params',
-                'repeat_channels',
-                't_clip',
-                'gpus',
-                'num_workers',
-                'strategy',
-                'precision',
-                'deterministic'
+            'model_stage', 'debug', 'profiler_enabled', 'pretrained',
+            'max_epochs', 'patience',
+            'batch_size',
+            'effective_batch_size',
+            'accumulate_grad_batches',
+            'effective_batch_size_achieved',
+            'learning_rate', 'weight_decay', 'warmup_steps', 'use_scheduler',
+            'use_augmentation',
+            'normalize_params', 'repeat_channels', 't_clip',
+            'gpus_for_trainer', 'num_gpus_for_calc', 'num_workers', 'strategy_for_trainer',
+            'precision', 'deterministic', 'seed',
+            'dataset_dir', 'log_dir',
+            'test_model_path', 'resume_from_ckpt'
         ):
             log(f'   {key}: {self.run_config.get(key)}')
 
@@ -451,6 +459,7 @@ class Experiment:
             profiler_scheduler_conf=rc.get('profiler_scheduler_conf'),
 
             testing_ckpt_path=rc.get('test_model_path', None),
+            resume_from_ckpt_path=rc.get('resume_from_ckpt')
         )
 
 
@@ -472,7 +481,7 @@ if __name__ == "__main__":
     parser.add_argument("--num_workers", type=int, default=None)
     parser.add_argument("--strategy", type=str, choices=["ddp","ddp_spawn","deepspeed","fsdp","none"], default=None)
     parser.add_argument("--precision", type=str, choices=["16-mixed","bf16-mixed","32-true","64-true"], default=None)
-    parser.add_argument("--patience", type=int, default=None)
+    parser.add_argument("--patience", type=int, default=25)
     parser.add_argument("--warmup_steps", type=int, default=None)
     parser.add_argument("--weight_decay", type=float, default=None)
     parser.add_argument("--use_scheduler", action=argparse.BooleanOptionalAction, default=True)
@@ -497,7 +506,9 @@ if __name__ == "__main__":
     # Paths
     parser.add_argument("--dataset_dir", type=str, default=CADICA_DATASET_DIR)
     parser.add_argument("--log_dir", type=str, default=LOGS_DIR)
+
     parser.add_argument("--test_model_path", type=str, default=None)
+    parser.add_argument("--resume_from_ckpt", type=str, default=None)
 
     args = parser.parse_args()
 

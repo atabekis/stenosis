@@ -18,7 +18,12 @@ LOGS_DIR = PROJECT_ROOT / "logs"
 
 # ------------- CONTROLS --------------- #
 
+TEST_MODEL_ON_KEYBOARD_INTERRUPT = True
+
 DEFAULT_WIDTH, DEFAULT_HEIGHT = 512, 512  # pixels
+# DEFAULT_WIDTH, DEFAULT_HEIGHT = 448, 448  # pixels
+
+CADICA_NEGATIVE_ONLY_ON_BOTH = True
 
 # -- !Important
 #  T_CLIP is used to set the length of a video sequence to T_CLIP frames, this is applied universally
@@ -45,7 +50,7 @@ NUM_WORKERS = get_optimal_workers() if not DEBUG else 4
 
 # -------------- MODEL-SPECIFIC CONTROLS ---------- #
 FOCAL_LOSS_ALPHA = 0.25
-FOCAL_LOSS_GAMMA = 1.5
+FOCAL_LOSS_GAMMA = 2.0
 DETECTIONS_PER_IMG_AFTER_NMS = 20
 
 GIOU_LOSS_COEF = 2.0
@@ -53,8 +58,8 @@ L1_LOSS_COEF = 5.0
 CLS_LOSS_COEF = 2.0
 
 # DEFAULTS
-# DEFAULT_ANCHOR_SIZES = ((8, 11, 16), (22, 32, 45), (64, 90, 128))
-DEFAULT_ANCHOR_SIZES = ((16, 24, 32), (48, 64, 96), (128, 192, 256))
+DEFAULT_ANCHOR_SIZES = ((10, 14, 20), (22, 32, 45), (60, 80, 100))
+# DEFAULT_ANCHOR_SIZES = ((16, 24, 32), (48, 64, 96), (128, 192, 256))
 DEFAULT_ANCHOR_ASPECT_RATIOS = ((0.5, 1.0, 2.0),) * len(DEFAULT_ANCHOR_SIZES)
 
 FPN_OUT_CHANNELS = 256
