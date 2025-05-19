@@ -49,8 +49,9 @@ NUM_WORKERS = get_optimal_workers() if not DEBUG else 4
 
 
 # -------------- MODEL-SPECIFIC CONTROLS ---------- #
-FOCAL_LOSS_ALPHA = 0.25
-FOCAL_LOSS_GAMMA = 2.0
+FOCAL_LOSS_ALPHA = 0.5
+FOCAL_LOSS_GAMMA = 1.0
+
 DETECTIONS_PER_IMG_AFTER_NMS = 20
 
 GIOU_LOSS_COEF = 2.0
@@ -58,7 +59,7 @@ L1_LOSS_COEF = 5.0
 CLS_LOSS_COEF = 2.0
 
 # DEFAULTS
-DEFAULT_ANCHOR_SIZES = ((10, 14, 20), (22, 32, 45), (60, 80, 100))
+DEFAULT_ANCHOR_SIZES = ((8, 11, 16), (22, 32, 45), (60, 80, 100))
 # DEFAULT_ANCHOR_SIZES = ((16, 24, 32), (48, 64, 96), (128, 192, 256))
 DEFAULT_ANCHOR_ASPECT_RATIOS = ((0.5, 1.0, 2.0),) * len(DEFAULT_ANCHOR_SIZES)
 
@@ -82,9 +83,20 @@ COMMON_RETINANET_CONFIG = {
     "pretrained_backbone": True,
 }
 
+
+CUSTOM_CLS_HEAD_CONFIG = {
+    "custom_head":  True,
+
+    "classification_head_dropout_p": 0.3,
+    "classification_head_num_convs": 4,
+    "classification_head_use_groupnorm": True,
+    "classification_head_num_gn_groups": 32,
+}
+
 # -------- STAGE 1: EFFNET-B0 + FPN + RETINANET -------- #
 STAGE1_RETINANET_DEFAULT_CONFIG = {
     **COMMON_RETINANET_CONFIG,
+    **CUSTOM_CLS_HEAD_CONFIG
 }
 
 # -------- STAGE 2: EFFNET-B0 + FPN + TSM + RETINANET -------- #
@@ -97,7 +109,8 @@ STAGE2_TSM_RETINANET_DEFAULT_CONFIG = {
     "matcher_high_threshold": 0.4,
     "matcher_low_threshold": 0.3,
     "matcher_allow_low_quality": True,
-    "use_gradient_checkpointing": False
+    "use_gradient_checkpointing": False,
+    **CUSTOM_CLS_HEAD_CONFIG
 }
 
 # -------- STAGE 3: THANOS + FPN + RETINANET -------- #

@@ -11,6 +11,7 @@ from typing import Union, Optional
 
 # Backbone model
 from models.stage1.backbone import EfficientNetFPNBackbone
+from models.retinanet_utils import GNDropoutRetinaNetClassificationHead
 
 # Local imports
 from util import log
@@ -40,6 +41,13 @@ class FPNRetinaNet(nn.Module):
         focal_loss_gamma = config.get("focal_loss_gamma")
         pretrained_backbone = config.get("pretrained_backbone", True)
         detections_per_img = config.get("inference_detections_per_img")
+
+        use_custom_classification_head = config.get("custom_head", False)
+        classification_head_dropout_p = config.get("classification_head_dropout_p", 0.0)
+        classification_head_num_convs = config.get("classification_head_num_convs", 4)
+        classification_head_use_groupnorm = config.get("classification_head_use_groupnorm", False)
+        classification_head_num_gn_groups = config.get("classification_head_num_gn_groups", 32)
+
 
 
         log("Initializing FPNRetinaNet with parameters:")
@@ -75,6 +83,20 @@ class FPNRetinaNet(nn.Module):
             nms_threshold=nms_thresh,
             detections_per_img=detections_per_img,
         )
+
+        if use_custom_classification_head:
+            self.head.classification_head = GNDropoutRetinaNetClassificationHead(
+                in_channels=fpn_out_channels,
+                num_anchors=self.anchor_generator.num_anchors_per_location()[0],
+                num_classes=self.num_classes,
+
+                num_convs=classification_head_num_convs,
+                dropout_p=classification_head_dropout_p,
+                use_groupnorm=classification_head_use_groupnorm,
+                num_gn_groups=classification_head_num_gn_groups,
+
+                prior_probability=0.01,
+            )
 
 
         self.retinanet.head.classification_head.focal_loss_alpha = focal_loss_alpha

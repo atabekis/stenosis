@@ -18,6 +18,9 @@ from torchvision.models.detection.anchor_utils import AnchorGenerator
 # Local imports
 from util import log
 
+
+from models.retinanet_utils import GNDropoutRetinaNetClassificationHead
+
 from models.stage2.tsm_backbone import tsm_efficientnet_b0
 
 
@@ -51,6 +54,13 @@ class TSMRetinaNet(nn.Module):
         matcher_low_threshold = config.get("matcher_low_threshold", 0.4)
         matcher_allow_low_quality = config.get("matcher_allow_low_quality", True)
 
+        use_custom_classification_head = config.get("custom_head", False)
+        classification_head_dropout_p = config.get("classification_head_dropout_p", 0.0)
+        classification_head_num_convs = config.get("classification_head_num_convs", 4)
+        classification_head_use_groupnorm = config.get("classification_head_use_groupnorm", False)
+        classification_head_num_gn_groups = config.get("classification_head_num_gn_groups", 32)
+
+
 
         log("Initializing TSMRetinaNet with parameters:")
         log(f"  Num classes: {self.num_classes}")
@@ -65,7 +75,7 @@ class TSMRetinaNet(nn.Module):
         log(f"  Detections per image: {self.detections_per_img}")
         log(f"  Inserting TSM to internal stages {tsm_effnet_stages}")
         log(f"  Gradient checkpointing: {use_gradient_checkpointing}")
-
+        log(f"  Use Custom Classification Head: {use_custom_classification_head}")
 
         # 1. TSM backbone
         tsm_effnet = tsm_efficientnet_b0(
@@ -78,7 +88,7 @@ class TSMRetinaNet(nn.Module):
             use_gradient_checkpoint=use_gradient_checkpointing,
         )
 
-        return_layers = {'stage3': '0', 'stage5': '1', 'stage6': '2'}
+        return_layers = {'stage3': '0', 'stage5': '1', 'stage6': '2'} #p3, p4, p5
         self.backbone = IntermediateLayerGetter(tsm_effnet.features, return_layers=return_layers)
 
         # 2. FPN
@@ -89,12 +99,29 @@ class TSMRetinaNet(nn.Module):
         self.anchor_generator = AnchorGenerator(sizes=anchor_sizes, aspect_ratios=anchor_aspect_ratios)
         num_anchors = self.anchor_generator.num_anchors_per_location()[0]
 
-        # 4. RetinaNet head
+        # 4. RetinaNet head - we have both default and the custom head with dropout and group norm
+
         self.head = RetinaNetHead(
             in_channels=fpn_out_channels,
             num_anchors=num_anchors,
             num_classes=self.num_classes
         )
+
+
+        if use_custom_classification_head:
+            self.head.classification_head = GNDropoutRetinaNetClassificationHead(
+                in_channels=fpn_out_channels,
+                num_anchors=num_anchors,
+                num_classes=self.num_classes,
+
+                num_convs=classification_head_num_convs,
+                dropout_p=classification_head_dropout_p,
+                use_groupnorm=classification_head_use_groupnorm,
+                num_gn_groups=classification_head_num_gn_groups,
+
+                prior_probability=0.01,
+            )
+
 
         self.head.classification_head.focal_loss_alpha = focal_loss_alpha
         self.head.classification_head.focal_loss_gamma = focal_loss_gamma
