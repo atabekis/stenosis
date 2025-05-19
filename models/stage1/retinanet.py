@@ -85,10 +85,10 @@ class FPNRetinaNet(nn.Module):
         )
 
         if use_custom_classification_head:
-            self.head.classification_head = GNDropoutRetinaNetClassificationHead(
+            self.retinanet.head.classification_head = GNDropoutRetinaNetClassificationHead(
                 in_channels=fpn_out_channels,
                 num_anchors=self.anchor_generator.num_anchors_per_location()[0],
-                num_classes=self.num_classes,
+                num_classes=num_classes,
 
                 num_convs=classification_head_num_convs,
                 dropout_p=classification_head_dropout_p,
