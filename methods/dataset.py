@@ -34,7 +34,8 @@ class XCADataset(Dataset):
             is_train: bool = False,
             normalize_params: dict[str, float] = None,
             repeat_channels: bool = False,
-            t_clip: int = T_CLIP
+            t_clip: int = T_CLIP,
+            jitter: bool = False,
     ):
         """
         Initialize
@@ -49,6 +50,7 @@ class XCADataset(Dataset):
         self.data_list = data_list
         self.repeat_channels = repeat_channels
         self.use_augmentation = use_augmentation and is_train
+        self.jitter = jitter
 
         if not data_list:
             self.using_video_format = True
@@ -78,19 +80,33 @@ class XCADataset(Dataset):
                 min_area=8
             )
             self.augment_transform = A.ReplayCompose([
+                # geometric
                 A.HorizontalFlip(p=0.4),
-                A.VerticalFlip(p=0.5),
-                A.RandomRotate90(p=0.6),
+                # A.SafeRotate(limit=15, p=0.5, border_mode=cv2.BORDER_CONSTANT),
+                # A.VerticalFlip(p=0.5),
+                # A.RandomRotate90(p=0.6),
+                A.Rotate(limit=20, p=0.3),
+                # A.D4(p=0.4),
+
+
+                # pixel-level
                 A.RandomBrightnessContrast(brightness_limit=0.15, contrast_limit=0.5, p=0.75),
                 A.RandomGamma(gamma_limit=(80, 120), p=0.5),
                 A.Sharpen(alpha=(0.2, 0.5), lightness=(0.5, 1.0), p=0.3),
                 A.ImageCompression(quality_range=(80, 99), p=0.5),
+
                 A.OneOf([
-                    A.GaussianBlur(blur_limit=(3, 7), p=0.6),
-                    A.MotionBlur(blur_limit=(3, 7), p=0.6),
-                    A.MedianBlur(blur_limit=5, p=0.4),
-                    A.Defocus(radius=(1, 3), alias_blur=0.3, p=0.3),
-                ], p=0.7)
+                    A.GaussianBlur(blur_limit=(3, 5), p=0.5),
+                    A.MotionBlur(blur_limit=(3, 5), p=0.5),
+                    A.MedianBlur(blur_limit=3, p=0.3),
+                ], p=0.7),
+
+                A.GaussNoise(std_range=(0.1, 0.3)),
+                A.CoarseDropout(num_holes_range=(1 ,5),
+                                hole_height_range=(0, int(DEFAULT_HEIGHT * 0.08)), hole_width_range=(0, int(DEFAULT_WIDTH * 0.08)),
+                                fill=0,
+                                p=0.3),
+
             ], bbox_params=bbox_params)
             self.video_aug_params = {}
         else:
@@ -160,6 +176,7 @@ class XCADataset(Dataset):
 
         return {'mean': float(mean), 'std': std}
 
+
     def _apply_augment(self, arr: np.ndarray, bboxes: list[list[float]], category_ids: list[int],
                        video_uid: Optional[tuple]):
         if not (self.use_augmentation and self.augment_transform):
@@ -203,6 +220,7 @@ class XCADataset(Dataset):
         if self.video_aug_params is not None:
             self.video_aug_params.clear()
         self.epoch += 1
+
 
     def _process_frame(self, arr: np.ndarray, raw_bbox: Optional[np.ndarray], video_uid: Optional[tuple]):
         if not isinstance(arr, np.ndarray):
@@ -295,22 +313,26 @@ class XCADataset(Dataset):
 
         return {'boxes': box_tensor, 'labels': label_tensor}
 
+    def _apply_temporal_jitter(self, start: int, end: int, total_frames: int, window: int = 2) -> list[int]:
+        """Generate a list of frame indices between [start, end), with random offset in window frames"""
+        if not self.jitter:
+            return list(range(start, end))
+
+        jittered = []
+        for idx in range(start, end):
+            offset = random.randint(-window, window)
+            new_idx = idx + offset
+            new_idx = max(0, min(new_idx, total_frames - 1)) # clamp to [0, total_frames - 1]
+            jittered.append(new_idx)
+        return jittered
+
     def _fetch_video_clip(self, video: 'XCAVideo'):
         if not isinstance(video, XCAVideo):
             raise TypeError(f"Expected XCAVideo, got {type(video)}")
         total_frames = video.frame_count
         if total_frames == 0:
-            log(f"Warning: Video {video.patient_id}/{video.video_id} has no frames. Returning empty data.")
-            c = 3 if self.repeat_channels else 1
-            dummy_clip_tensor = torch.zeros((self.t_clip, c, DEFAULT_HEIGHT, DEFAULT_WIDTH), dtype=torch.float32)
-            dummy_targets = [self._get_target_dict(None) for _ in range(self.t_clip)]
-            dummy_mask = torch.zeros((self.t_clip,), dtype=torch.bool)
-            dummy_metadata = {
-                "patient_id": video.patient_id, "video_id": video.video_id,
-                "start_frame_orig": 0, "end_frame_orig": -1, "num_frames_in_clip": 0,
-                "total_frames_in_video": 0, "is_full_video": True, "error": "No frames in video"
-            }
-            return dummy_clip_tensor, dummy_targets, dummy_mask, dummy_metadata
+            raise IndexError(f"Video {video.patient_id}/{video.video_id} has no frames")  # should not happen
+
 
         uid = (video.patient_id, video.video_id)
         clip_len = min(total_frames, self.t_clip)
@@ -321,44 +343,54 @@ class XCADataset(Dataset):
             clip_len = total_frames
 
         end = start + clip_len
-        raw_frames_slice = video.frames[start:end]
+        sample_idxs = self._apply_temporal_jitter(start, end, total_frames)
 
-        bboxes_slice = ([None] * clip_len)
+        # raw_frames_slice = video.frames[start:end]
+        # get jittered frames
+        raw_frames_slice = [video.frames[i] for i in sample_idxs]
         if video.bboxes is not None and len(video.bboxes) == total_frames:
-            bboxes_slice = video.bboxes[start:end]
-        elif video.bboxes is not None and len(video.bboxes) != total_frames:
-            log(f"Warning: Mismatch in frame_count ({total_frames}) and bboxes length ({len(video.bboxes)}) for video {uid}. Using None for bboxes.")
+            bboxes_slice = [video.bboxes[i] for i in sample_idxs]
+        else:
+            if video.bboxes is not None and len(video.bboxes) != total_frames:
+                log(f'Mismatch in frame_count ({total_frames}) and bboxes length ({len(video.bboxes)}) ')
+            bboxes_slice = [None] * len(sample_idxs)
+        # bboxes_slice = ([None] * clip_len)
+        # if video.bboxes is not None and len(video.bboxes) == total_frames:
+        #     bboxes_slice = video.bboxes[start:end]
+        # elif video.bboxes is not None and len(video.bboxes) != total_frames:
+        #     log(f"Warning: Mismatch in frame_count ({total_frames}) and bboxes length ({len(video.bboxes)}) for video {uid}. Using None for bboxes.")
 
         processed_frames_tensors = []
         processed_targets = []
 
-        for i in range(clip_len):
-            raw_frame = raw_frames_slice[i]
-            raw_bbox_for_frame = bboxes_slice[i]
 
-            if raw_bbox_for_frame is not None and not isinstance(raw_bbox_for_frame, np.ndarray):
-                log(f"Warning: Bbox for frame {start + i} in video {uid} is not np.ndarray ({type(raw_bbox_for_frame)}). Treating as None.")
-                raw_bbox_for_frame = None
-            elif raw_bbox_for_frame is not None and raw_bbox_for_frame.size == 0:
-                raw_bbox_for_frame = None
 
-            frame_tensor, aug_bbox = self._process_frame(raw_frame, raw_bbox_for_frame, uid)
+        for idx, raw_frame, raw_bbox in zip(sample_idxs, raw_frames_slice, bboxes_slice):
+            if raw_bbox is not None and not isinstance(raw_bbox, np.ndarray):
+                raise RuntimeError(f'Bbox for frame {idx} in video {uid} is not np.ndarray ({type(raw_frame)}).')
+
+            frame_tensor, aug_bbox = self._process_frame(raw_frame, raw_bbox, uid)
             processed_frames_tensors.append(frame_tensor)
             processed_targets.append(self._get_target_dict(aug_bbox))
 
+
+        # for i in range(clip_len):
+        #     raw_frame = raw_frames_slice[i]
+        #     raw_bbox_for_frame = bboxes_slice[i]
+        #
+        #     if raw_bbox_for_frame is not None and not isinstance(raw_bbox_for_frame, np.ndarray):
+        #         log(f"Warning: Bbox for frame {start + i} in video {uid} is not np.ndarray ({type(raw_bbox_for_frame)}). Treating as None.")
+        #         raw_bbox_for_frame = None
+        #     elif raw_bbox_for_frame is not None and raw_bbox_for_frame.size == 0:
+        #         raw_bbox_for_frame = None
+        #
+        #     frame_tensor, aug_bbox = self._process_frame(raw_frame, raw_bbox_for_frame, uid)
+        #     processed_frames_tensors.append(frame_tensor)
+        #     processed_targets.append(self._get_target_dict(aug_bbox))
+
         if not processed_frames_tensors:
-            log(f"Error: No frames processed for video {uid} despite total_frames={total_frames}.")
-            c = 3 if self.repeat_channels else 1
-            dummy_clip_tensor = torch.zeros((self.t_clip, c, DEFAULT_HEIGHT, DEFAULT_WIDTH), dtype=torch.float32)
-            dummy_targets = [self._get_target_dict(None) for _ in range(self.t_clip)]
-            dummy_mask = torch.zeros((self.t_clip,), dtype=torch.bool)
-            dummy_metadata = {
-                "patient_id": video.patient_id, "video_id": video.video_id,
-                "start_frame_orig": start, "end_frame_orig": end - 1, "num_frames_in_clip": 0,
-                "total_frames_in_video": total_frames, "is_full_video": clip_len < self.t_clip,
-                "error": "No frames processed"
-            }
-            return dummy_clip_tensor, dummy_targets, dummy_mask, dummy_metadata
+            raise RuntimeError(f" No frames processed for video {uid} despite total_frames={total_frames}.")
+
 
         clip_tensor = torch.stack(processed_frames_tensors, dim=0)
 
@@ -378,6 +410,7 @@ class XCADataset(Dataset):
             "num_frames_in_clip": clip_len,
             "total_frames_in_video": total_frames,
             "is_full_video": clip_len == total_frames and pad_count > 0,
+            "jittered_frame_indices": sample_idxs
         }
         return clip_tensor, processed_targets, mask, metadata
 

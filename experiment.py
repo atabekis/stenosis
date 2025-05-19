@@ -53,6 +53,7 @@ BASE_CONFIG_SINGLE_GPU = {
     'precision': '16-mixed',
     'repeat_channels': True,
     't_clip': T_CLIP,
+    'jitter': False,
     'seed': SEED,
     'debug': DEBUG,
     'dataset_dir': CADICA_DATASET_DIR,
@@ -303,6 +304,7 @@ class Experiment:
             normalize_params=rc['normalize_params'],
             t_clip=rc['t_clip'],
             seed=rc['seed'],
+            jitter=rc['jitter']
         )
 
 
@@ -410,7 +412,7 @@ class Experiment:
             'effective_batch_size_achieved',
             'learning_rate', 'weight_decay', 'warmup_steps', 'use_scheduler',
             'use_augmentation',
-            'normalize_params', 'repeat_channels', 't_clip',
+            'normalize_params', 'repeat_channels', 't_clip', 'jitter',
             'gpus_for_trainer', 'num_gpus_for_calc', 'num_workers', 'strategy_for_trainer',
             'precision', 'deterministic', 'seed',
             'dataset_dir', 'log_dir',
@@ -491,7 +493,12 @@ if __name__ == "__main__":
     parser.add_argument("--debug", action=argparse.BooleanOptionalAction, default=DEBUG)
     parser.add_argument("--profile", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--repeat_channels", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--jitter", action=argparse.BooleanOptionalAction, default=False)
+
     parser.add_argument("--deterministic", action=argparse.BooleanOptionalAction, default=False)
+
+    # Model specific: general
+
 
     # Model-specific: Stages 2, 3
     parser.add_argument("--t_clip", type=int, default=T_CLIP)

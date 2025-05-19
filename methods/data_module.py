@@ -32,6 +32,7 @@ class XCADataModule(pl.LightningDataModule):
             normalize_params: dict[str, float] = None,
 
             t_clip: int = T_CLIP,
+            jitter: bool = False,
 
             seed: int = SEED,
     ):
@@ -57,6 +58,8 @@ class XCADataModule(pl.LightningDataModule):
         self.repeat_channels = repeat_channels
         self.normalize_params = normalize_params  # to be extracted from train dataset, or user supplied
         self.seed = seed
+
+        self.jitter = jitter
 
 
         self.using_video_format = isinstance(data_list[0], XCAVideo) if data_list else True
@@ -153,7 +156,8 @@ class XCADataModule(pl.LightningDataModule):
             is_train=True,
             normalize_params=self.normalize_params,
             repeat_channels=self.repeat_channels,
-            t_clip=self.t_clip
+            t_clip=self.t_clip,
+            jitter=self.jitter
         )
 
         self._validate_dataset_samples(self.train_dataset, 'Training Set')
@@ -164,7 +168,8 @@ class XCADataModule(pl.LightningDataModule):
             is_train=False,
             normalize_params=self.normalize_params,
             repeat_channels=self.repeat_channels,
-            t_clip=self.t_clip
+            t_clip=self.t_clip,
+            jitter=False,
         )
 
         self._validate_dataset_samples(self.val_dataset, 'Validation Set')
@@ -175,7 +180,8 @@ class XCADataModule(pl.LightningDataModule):
             is_train=False,
             normalize_params=self.normalize_params,
             repeat_channels=self.repeat_channels,
-            t_clip=self.t_clip
+            t_clip=self.t_clip,
+            jitter=False,
         )
 
     def _make_dataloader(self, dataset, shuffle: bool):
