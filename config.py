@@ -19,10 +19,6 @@ LOGS_DIR = PROJECT_ROOT / "logs"
 # ------------- CONTROLS --------------- #
 
 TEST_MODEL_ON_KEYBOARD_INTERRUPT = True
-
-DEFAULT_WIDTH, DEFAULT_HEIGHT = 512, 512  # pixels
-# DEFAULT_WIDTH, DEFAULT_HEIGHT = 448, 448  # pixels
-
 CADICA_NEGATIVE_ONLY_ON_BOTH = True
 
 # -- !Important
@@ -49,7 +45,7 @@ NUM_WORKERS = get_optimal_workers() if not DEBUG else 4
 
 
 # -------------- MODEL-SPECIFIC CONTROLS ---------- #
-FOCAL_LOSS_ALPHA = 0.5
+FOCAL_LOSS_ALPHA = 0.75
 FOCAL_LOSS_GAMMA = 1.0
 
 DETECTIONS_PER_IMG_AFTER_NMS = 20
@@ -59,8 +55,12 @@ L1_LOSS_COEF = 5.0
 CLS_LOSS_COEF = 2.0
 
 # DEFAULTS
+DEFAULT_WIDTH, DEFAULT_HEIGHT = 512, 512  # pixels
+# DEFAULT_WIDTH, DEFAULT_HEIGHT = 448, 448  # pixels
+
 DEFAULT_ANCHOR_SIZES = ((8, 11, 16), (22, 32, 45), (60, 80, 100))
 # DEFAULT_ANCHOR_SIZES = ((16, 24, 32), (48, 64, 96), (128, 192, 256))
+
 DEFAULT_ANCHOR_ASPECT_RATIOS = ((0.5, 1.0, 2.0),) * len(DEFAULT_ANCHOR_SIZES)
 
 FPN_OUT_CHANNELS = 256
@@ -85,12 +85,22 @@ COMMON_RETINANET_CONFIG = {
 
 
 CUSTOM_CLS_HEAD_CONFIG = {
-    "custom_head":  True,
+    "custom_head":  False,
 
-    "classification_head_dropout_p": 0.3,
+    "classification_head_dropout_p": 0.5,
     "classification_head_num_convs": 4,
     "classification_head_use_groupnorm": True,
     "classification_head_num_gn_groups": 32,
+}
+
+
+SCA_CONFIG = {
+    "t_iou": 0.3,
+    "t_frame": 3,
+    "t_score_interp": 0.1,
+    "max_frame_gap_for_linking": 1,
+    "apply_sca_on_val": True,
+    "apply_sca_on_test": True,
 }
 
 # -------- STAGE 1: EFFNET-B0 + FPN + RETINANET -------- #

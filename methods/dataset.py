@@ -345,7 +345,6 @@ class XCADataset(Dataset):
         end = start + clip_len
         sample_idxs = self._apply_temporal_jitter(start, end, total_frames)
 
-        # raw_frames_slice = video.frames[start:end]
         # get jittered frames
         raw_frames_slice = [video.frames[i] for i in sample_idxs]
         if video.bboxes is not None and len(video.bboxes) == total_frames:
@@ -354,17 +353,8 @@ class XCADataset(Dataset):
             if video.bboxes is not None and len(video.bboxes) != total_frames:
                 log(f'Mismatch in frame_count ({total_frames}) and bboxes length ({len(video.bboxes)}) ')
             bboxes_slice = [None] * len(sample_idxs)
-        # bboxes_slice = ([None] * clip_len)
-        # if video.bboxes is not None and len(video.bboxes) == total_frames:
-        #     bboxes_slice = video.bboxes[start:end]
-        # elif video.bboxes is not None and len(video.bboxes) != total_frames:
-        #     log(f"Warning: Mismatch in frame_count ({total_frames}) and bboxes length ({len(video.bboxes)}) for video {uid}. Using None for bboxes.")
 
-        processed_frames_tensors = []
-        processed_targets = []
-
-
-
+        processed_frames_tensors, processed_targets = [], []
         for idx, raw_frame, raw_bbox in zip(sample_idxs, raw_frames_slice, bboxes_slice):
             if raw_bbox is not None and not isinstance(raw_bbox, np.ndarray):
                 raise RuntimeError(f'Bbox for frame {idx} in video {uid} is not np.ndarray ({type(raw_frame)}).')
@@ -373,24 +363,8 @@ class XCADataset(Dataset):
             processed_frames_tensors.append(frame_tensor)
             processed_targets.append(self._get_target_dict(aug_bbox))
 
-
-        # for i in range(clip_len):
-        #     raw_frame = raw_frames_slice[i]
-        #     raw_bbox_for_frame = bboxes_slice[i]
-        #
-        #     if raw_bbox_for_frame is not None and not isinstance(raw_bbox_for_frame, np.ndarray):
-        #         log(f"Warning: Bbox for frame {start + i} in video {uid} is not np.ndarray ({type(raw_bbox_for_frame)}). Treating as None.")
-        #         raw_bbox_for_frame = None
-        #     elif raw_bbox_for_frame is not None and raw_bbox_for_frame.size == 0:
-        #         raw_bbox_for_frame = None
-        #
-        #     frame_tensor, aug_bbox = self._process_frame(raw_frame, raw_bbox_for_frame, uid)
-        #     processed_frames_tensors.append(frame_tensor)
-        #     processed_targets.append(self._get_target_dict(aug_bbox))
-
         if not processed_frames_tensors:
             raise RuntimeError(f" No frames processed for video {uid} despite total_frames={total_frames}.")
-
 
         clip_tensor = torch.stack(processed_frames_tensors, dim=0)
 
