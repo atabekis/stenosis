@@ -19,8 +19,7 @@ from torchvision.models.detection.anchor_utils import AnchorGenerator
 from util import log
 
 
-from models.retinanet_utils import GNDropoutRetinaNetClassificationHead
-
+from models.common.retinanet_utils import GNDropoutRetinaNetClassificationHead
 from models.stage2.tsm_backbone import tsm_efficientnet_b0
 
 
