@@ -59,6 +59,7 @@ BASE_CONFIG_SINGLE_GPU = {
     'dataset_dir': CADICA_DATASET_DIR,
     'log_dir': LOGS_DIR,
     'num_log_val_images': 2,
+    'use_sca': False,
 }
 
 BASE_CONFIG_MULTI_GPU = {
@@ -345,8 +346,6 @@ class Experiment:
             'precision': cfg.get('precision', '32-true'),
             't_clip': cfg.get('t_clip', T_CLIP),
             'seed': cfg.get('seed'),
-            'num_target_gpus': cfg.get('num_target_gpus'),
-            'strategy': str(cfg.get('strategy')),
             'dataset_dir': os.path.basename(str(cfg.get('dataset_dir'))),
         }
 
@@ -391,6 +390,7 @@ class Experiment:
             accumulate_grad_batches=cfg['accumulate_grad_batches'],
             stem_learning_rate=cfg.get('stem_learning_rate', 1e-5),
             use_scheduler=cfg.get('use_scheduler', True),
+            use_sca=cfg.get('use_sca', False),
             focal_alpha=cfg.get('focal_loss_alpha'),
             focal_gamma=cfg.get('focal_loss_gamma'),
             positive_class_id=cfg.get('positive_class_id', POSITIVE_CLASS_ID),
@@ -404,7 +404,7 @@ class Experiment:
     def _print_config_summary(self):
         log('---- Configuration Summary ----')
         for key in (
-            'model_stage', 'debug', 'profiler_enabled', 'pretrained',
+            'model_stage', 'debug', 'profiler_enabled', 'pretrained', 'use_sca',
             'max_epochs', 'patience',
             'batch_size',
             'effective_batch_size',
@@ -501,6 +501,7 @@ if __name__ == "__main__":
 
 
     # Model-specific: Stages 2, 3
+    parser.add_argument('--use_sca', action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--t_clip", type=int, default=T_CLIP)
     parser.add_argument("--tsm_shift_fraction", type=float, default=0.125)
     parser.add_argument("--tsm_shift_mode", type=str, choices=["residual","inplace"], default="residual")

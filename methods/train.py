@@ -76,10 +76,10 @@ def train_model(
     logger = TensorBoardLogger(save_dir=log_dir, name=experiment_name)
 
     checkpoint_callback_map = ModelCheckpoint(
-        filename=model.__class__.__name__ + '-{epoch:02d}-{val/mAP:.4f}',
+        filename=model.__class__.__name__ + '-{epoch:02d}-{val_mAP:.4f}',
         save_top_k=3,
         verbose=True,
-        monitor='val/mAP',
+        monitor='val_mAP',
         mode='max',
         save_on_train_epoch_end=False,
         every_n_epochs=1,
