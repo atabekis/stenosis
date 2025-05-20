@@ -94,4 +94,3 @@ class GNDropoutRetinaNetClassificationHead(RetinaNetClassificationHead):
                       f"adjusted num_gn_groups from configured {config_num_groups} to {actual_num_gn_groups}.")
         return actual_num_gn_groups
 
-

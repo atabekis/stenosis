@@ -21,6 +21,7 @@ from torch.utils.tensorboard import SummaryWriter
 from pytorch_lightning.loggers import TensorBoardLogger
 
 # Local imports
+from models.common.sca_utils import apply_sequence_consistency_alignment
 from util import log
 from config import (
     FOCAL_LOSS_ALPHA,
@@ -30,7 +31,9 @@ from config import (
     CLS_LOSS_COEF,
     POSITIVE_CLASS_ID,
     PRF1_THRESH,
-    CLASSES
+    CLASSES,
+
+    SCA_CONFIG
 )
 
 # tensorboard logging
@@ -67,6 +70,7 @@ class DetectionLightningModule(pl.LightningModule):
             # loss params (can be overridden by model-specific losses)
 
             use_scheduler: bool = True,
+            use_sca: bool = False,
 
             focal_alpha: float = FOCAL_LOSS_ALPHA,
             focal_gamma: float = FOCAL_LOSS_GAMMA,
@@ -103,6 +107,7 @@ class DetectionLightningModule(pl.LightningModule):
         self.cls_loss_coef = cls_loss_coef
         self.positive_class_id = positive_class_id
         self.hparam_primary_metric = hparam_primary_metric
+        self.use_sca = use_sca
 
 
         if model_stage not in [1, 2, 3]:
@@ -224,6 +229,7 @@ class DetectionLightningModule(pl.LightningModule):
         batch_size = len(images)
 
         is_val = (step_type == 'val')
+        is_test = (step_type == 'test')
 
         if self.model_stage == 1:
             images = images.squeeze(1)
@@ -252,9 +258,40 @@ class DetectionLightningModule(pl.LightningModule):
             preds = self.forward(images, targets=None, masks=masks)
         self.model.train(original_train_state_pred)
 
+
+        # # Intermission: Apply SCA:
+        sca_active = (is_val and SCA_CONFIG.get('apply_sca_on_val', False) or
+                      is_test and SCA_CONFIG.get('apply_sca_on_test', False))
+
+        preds_after_optional_sca = []
+        if self.model_stage != 1 and sca_active:
+            num_videos_in_batch, frames_per_video = images.size(0), images.size(1)
+
+            current_pred_idx = 0
+            for i in range(num_videos_in_batch):
+                # extract raw preds for the i-th video sequence
+                video_raw_preds_sequence = preds[current_pred_idx:current_pred_idx + frames_per_video]
+
+                # apply sca
+                video_refined_preds_sequence = apply_sequence_consistency_alignment(
+                    video_raw_preds_sequence,
+                    t_iou=SCA_CONFIG['t_iou'],
+                    t_frame=SCA_CONFIG['t_frame'],
+                    t_score_interp=SCA_CONFIG['t_score_interp'],
+                    max_frame_gap_for_linking=SCA_CONFIG['max_frame_gap_for_linking'],
+                )
+                preds_after_optional_sca.extend(video_refined_preds_sequence)
+                current_pred_idx += frames_per_video
+
+            preds = preds_after_optional_sca
+
+
+
         # 4. flatten preds/targets according to mask
         flat_mask = masks.view(-1)
         metric_preds, metric_tgts = [], []
+
+
 
         if self.model_stage == 1:
             # preds, targets are length-B lists
@@ -268,8 +305,8 @@ class DetectionLightningModule(pl.LightningModule):
             flat_tgts = [frame_tgt for video_tgts in targets for frame_tgt in video_tgts]
 
             if len(preds) != flat_mask.size(0) or len(flat_tgts) != flat_mask.size(0):
-                log(f'WARNING: Shape mismatch in _step_logic. Preds len: {len(preds)}, Flat Tgts len: {len(flat_tgts)}, Flat Mask len: {flat_mask.size(0)}. Skipping batch for metrics.')
-                return
+                raise RuntimeError(f'Shape mismatch in _step_logic. Preds len: {len(preds)}, Flat Tgts len: {len(flat_tgts)}, Flat Mask len: {flat_mask.size(0)}. Skipping batch for metrics.')
+
 
             for i, keep_frame in enumerate(flat_mask):
                 if keep_frame:
@@ -350,46 +387,27 @@ class DetectionLightningModule(pl.LightningModule):
                      on_step=False, on_epoch=True, prog_bar=True,
                      logger=True, sync_dist=True, batch_size=batch_size)
 
+
             for name, val in loss_dict.items():
                 if isinstance(val, torch.Tensor) and not torch.isnan(val) and not torch.isinf(val):
                     self.log(f'val/{name}', val,
                              on_step=False, on_epoch=True, prog_bar=False,
                              logger=True, sync_dist=True, batch_size=batch_size)
+                    if name == 'val/mAP':  # for checkpoint callbacks (cannot have '/' in filename)
+                        self.log(f'val_mAP', val,
+                                 on_step=False, on_epoch=True, prog_bar=False,
+                                 logger=True, sync_dist=True, batch_size=batch_size)
 
 
     def training_step(self, batch, batch_idx):
         """The training step needs to explicitly return the losses for logging"""
         images, targets, masks, _ = batch
-
-        # # TODO: REMOVE DEBUG
-        # if self.global_step < 2:  # Log only for the first 2 global steps
-        #     log(f"--- DEBUG: training_step global_step {self.global_step}, batch_idx {batch_idx} ---")
-        #     log(f"Raw images_orig shape: {images.shape}, dtype: {images.dtype}")
-        #     log(f"Raw images_orig stats: min={images.min():.3f}, max={images.max():.3f}, mean={images.mean():.3f}, std={images.std():.3f}")
-        #     log(f"Raw masks_orig shape: {masks.shape}, dtype: {masks.dtype}")
-        #     if targets and targets[0]:  # Check if targets_orig and its first element exist
-        #         log(f"Raw targets_orig[0] sample (first item in batch): {targets[0]}")
-        #     else:
-        #         log(f"Raw targets_orig is empty or first element is empty.")
-        # # TODO: REMOVE DEBUG
-
-
         assert targets is not None, "Targets must be provided during training"
 
         # 1. forward to get losses
         if self.model_stage == 1:
             images = images.squeeze(1) # [B, C, H, W]
             targets = [t[0] for t in targets if t] # list[dict]
-
-        # # TODO: REMOVE DEBUG
-        # if self.global_step < 2 and self.model_stage == 1:
-        #     log(f"Processed images_for_model (Stage 1) shape: {images.shape}, dtype: {images.dtype}")
-        #     if targets:
-        #         log(f"Processed targets_for_model[0] (Stage 1) sample: {targets[0]}")
-        #     else:
-        #         log(f"Processed targets_for_model (Stage 1) is empty.")
-        # # TODO: REMOVE DEBUG
-
 
 
         loss_dict = self.forward(images, targets=targets)
@@ -479,12 +497,12 @@ class DetectionLightningModule(pl.LightningModule):
             self.log_dict(map_metrics, prog_bar=prog_bar, logger=True, sync_dist=sync_dist, batch_size=1)
             metrics_dict.update(map_metrics)
 
-            # move preds/targets to CPU once
-            cpu_preds = [{k: v.cpu() for k, v in p.items()} for p in preds_attr]
-            cpu_targs = [{k: v.cpu() for k, v in t.items()} for t in targs_attr]
+            # # move preds/targets to CPU once
+            # cpu_preds = [{k: v.cpu() for k, v in p.items()} for p in preds_attr]
+            # cpu_targs = [{k: v.cpu() for k, v in t.items()} for t in targs_attr]
 
-            ap_small = self.compute_ap_for_area(cpu_preds, cpu_targs, max_area=32**2)
-            precision, recall, f1, avg_iou_tp = self.compute_prf1(cpu_preds, cpu_targs, iou_threshold=0.5)
+            ap_small = self.compute_ap_for_area(preds_attr, targs_attr, max_area=32**2)
+            precision, recall, f1, avg_iou_tp = self.compute_prf1(preds_attr, targs_attr, iou_threshold=0.5)
 
             # log the rest
             extra = {
@@ -611,8 +629,16 @@ class DetectionLightningModule(pl.LightningModule):
                         f"Setting 'hp/hp_metric' to 0.0 as a fallback.")
                     hp_metrics_to_log["hp_metric"] = 0.0 # fallback
 
-                params_for_log = self.hparams.copy()
-                logger.log_hyperparams(params_for_log, hp_metrics_to_log)
+
+
+                hparams_for_logging = {k: v for k, v in self.hparams.items() if
+                                       isinstance(v, (int, float, str, bool))}
+
+                for sca_k, sca_v in SCA_CONFIG.items():
+                    if f"sca_{sca_k}" not in hparams_for_logging and isinstance(sca_v, (int, float, str, bool)):
+                        hparams_for_logging[f"sca_{sca_k}"] = sca_v
+
+                logger.log_hyperparams(hparams_for_logging, hp_metrics_to_log)
                 logger.save()
 
 
