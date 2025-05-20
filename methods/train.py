@@ -17,7 +17,7 @@ from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 
 # Local imports
 from util import log
-from config import LOGS_DIR, TEST_MODEL_ON_KEYBOARD_INTERRUPT
+from config import LOGS_DIR, TEST_MODEL_ON_KEYBOARD_INTERRUPT, DEBUG
 
 
 def train_model(
@@ -68,7 +68,10 @@ def train_model(
 
     if testing_ckpt_path: experiment_folder_suffix = 'test_only'
     elif resume_from_ckpt_path: experiment_folder_suffix = 'resumed_training'
-    else: experiment_folder_suffix = 'augmented' if use_augmentation else 'unaugmented'
+    else:
+        experiment_folder_suffix = 'augmented' if use_augmentation else 'unaugmented'
+
+    if DEBUG: experiment_folder_suffix = 'debug'
 
 
     experiment_name = f'{experiment_name_core}/{experiment_folder_suffix}'

@@ -36,10 +36,12 @@ CLASSES = ['__background__', 'stenosis']  # binary task 1: stenosis, 0: backgrou
 NUM_CLASSES = len(CLASSES)
 POSITIVE_CLASS_ID = 1
 
+CONTRAST_LEVEL = 0.00
+
 
 # ------------ RUN-SPECIFIC CONTROLS --------------#
-DEBUG = False
-DEBUG_SIZE = 0.25  # keep % (DEBUG_SIZE * 100) of data
+DEBUG = True
+DEBUG_SIZE = 0.10  # keep % (DEBUG_SIZE * 100) of data
 
 NUM_WORKERS = get_optimal_workers() if not DEBUG else 4
 
@@ -70,6 +72,22 @@ INFERENCE_NMS_THRESH = 0.4
 PRF1_THRESH = 0.1
 
 # -------- SHARED BASE CONFIG -------- #
+
+OPTIMIZER_CONFIG = {
+    'name': 'AdamW',
+    'base_lr': 1e-4,
+    'weight_decay': 5e-4,
+    "differential_lr": {
+        "enabled": False,  # false to use base_lr for all params
+        "lr_backbone": 1e-5,
+        "lr_fpn": 5e-5, # 0.5 * base_lr
+        "lr_transformer_thanos": 5e-5,  # 0.5 * base_lr
+        "lr_regression_head": 1e-4,  # 1.0 * base_lr
+        "lr_classification_head": 5e-6,  # 0.05 * base_lr
+        "lr_other": 1e-5  # 0.1 * base_lr
+    }
+}
+
 COMMON_RETINANET_CONFIG = {
     "fpn_out_channels": FPN_OUT_CHANNELS,
     "num_classes": NUM_CLASSES,
@@ -85,9 +103,9 @@ COMMON_RETINANET_CONFIG = {
 
 
 CUSTOM_CLS_HEAD_CONFIG = {
-    "custom_head":  False,
+    "custom_head":  True,
 
-    "classification_head_dropout_p": 0.5,
+    "classification_head_dropout_p": 0.3,
     "classification_head_num_convs": 4,
     "classification_head_use_groupnorm": True,
     "classification_head_num_gn_groups": 32,

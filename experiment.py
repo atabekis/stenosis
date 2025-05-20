@@ -30,7 +30,7 @@ from config import (
     DEFAULT_HEIGHT, DEFAULT_WIDTH,
     TRAIN_SIZE, VAL_SIZE, TEST_SIZE,
     NUM_CLASSES, POSITIVE_CLASS_ID, FOCAL_LOSS_ALPHA, FOCAL_LOSS_GAMMA, T_CLIP,
-    STAGE1_RETINANET_DEFAULT_CONFIG, STAGE2_TSM_RETINANET_DEFAULT_CONFIG, STAGE3_THANOS_DEFAULT_CONFIG,
+    STAGE1_RETINANET_DEFAULT_CONFIG, STAGE2_TSM_RETINANET_DEFAULT_CONFIG, STAGE3_THANOS_DEFAULT_CONFIG, OPTIMIZER_CONFIG,
     TEST_MODEL_ON_KEYBOARD_INTERRUPT,
 )
 
@@ -43,8 +43,8 @@ BASE_CONFIG_SINGLE_GPU = {
     'batch_size': 32,
     'num_workers': NUM_WORKERS,
     'strategy': None,
-    'learning_rate': 1e-4,
-    'weight_decay': 1e-4,
+    'learning_rate': OPTIMIZER_CONFIG['base_lr'],  # now config.OPTIMIZER_CONFIG handles these ▼
+    'weight_decay': OPTIMIZER_CONFIG['weight_decay'],
     'gradient_clip_val': 1.0,
     'warmup_steps': 100,
     'use_scheduler': True,
@@ -388,7 +388,7 @@ class Experiment:
             max_epochs=cfg['max_epochs'],
             batch_size=lightning_module_batch_size_arg,
             accumulate_grad_batches=cfg['accumulate_grad_batches'],
-            stem_learning_rate=cfg.get('stem_learning_rate', 1e-5),
+            # stem_learning_rate=cfg.get('stem_learning_rate', 1e-5),
             use_scheduler=cfg.get('use_scheduler', True),
             use_sca=cfg.get('use_sca', False),
             focal_alpha=cfg.get('focal_loss_alpha'),

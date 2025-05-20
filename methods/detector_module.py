@@ -22,6 +22,7 @@ from pytorch_lightning.loggers import TensorBoardLogger
 
 # Local imports
 from models.common.sca_utils import apply_sequence_consistency_alignment
+from models.common.params_helper import get_optimizer_param_groups
 from util import log
 from config import (
     FOCAL_LOSS_ALPHA,
@@ -33,7 +34,8 @@ from config import (
     PRF1_THRESH,
     CLASSES,
 
-    SCA_CONFIG
+    SCA_CONFIG,
+    OPTIMIZER_CONFIG
 )
 
 # tensorboard logging
@@ -59,16 +61,17 @@ class DetectionLightningModule(pl.LightningModule):
             self,
             model: nn.Module,
             model_stage: int = 1,  # 1 for EffNet, 2: TSM, 3: Transformer
-            learning_rate: float = 1e-4,
-            weight_decay: float = 1e-4,
+            learning_rate: float = None,
+            weight_decay: float = None,
             warmup_steps: int = 50,
             max_epochs: int = 24,
             batch_size: int = 32,
             accumulate_grad_batches: int = 1,
             # specific params for stage 3
-            stem_learning_rate: float = 1e-5,  # differential LR
+            # stem_learning_rate: float = 1e-5,  # differential LR
             # loss params (can be overridden by model-specific losses)
 
+            optimizer_config: Optional[dict] = OPTIMIZER_CONFIG,
             use_scheduler: bool = True,
             use_sca: bool = False,
 
@@ -99,7 +102,7 @@ class DetectionLightningModule(pl.LightningModule):
         self.batch_size = batch_size
         self.accumulate_grad_batches = accumulate_grad_batches
         self.use_scheduler = use_scheduler
-        self.stem_learning_rate = stem_learning_rate
+        # self.stem_learning_rate = stem_learning_rate
         self.focal_alpha = focal_alpha
         self.focal_gamma = focal_gamma
         self.smooth_l1_beta = smooth_l1_beta
@@ -108,6 +111,7 @@ class DetectionLightningModule(pl.LightningModule):
         self.positive_class_id = positive_class_id
         self.hparam_primary_metric = hparam_primary_metric
         self.use_sca = use_sca
+        self.optimizer_config = optimizer_config
 
 
         if model_stage not in [1, 2, 3]:
@@ -117,8 +121,20 @@ class DetectionLightningModule(pl.LightningModule):
             raise ValueError(f'hparam_primary_metric_name ({self.hparam_primary_metric}) is not in the set of allowed'
                              f'metric suffixes: {self.VALID_METRIC_SUFFIXES}')
 
+        if self.learning_rate is not None:
+            self.optimizer_config['base_lr'] = self.learning_rate
+
+        if self.weight_decay is not None:
+            self.optimizer_config['weight_decay'] = self.weight_decay
+
         self._hparams_to_log = hparams_to_log or {}
-        self.save_hyperparameters(ignore=['model', 'normalize_params'])
+
+        hparams_to_save = {
+            k: v for k, v in locals().items()
+            if k not in ['self', '__class__', 'model', 'normalize_params', 'optimizer_config']
+        }
+        hparams_to_save.update(self.optimizer_config)
+        self.save_hyperparameters(hparams_to_save)
 
 
         # ------ initialize metrics -------
@@ -393,10 +409,7 @@ class DetectionLightningModule(pl.LightningModule):
                     self.log(f'val/{name}', val,
                              on_step=False, on_epoch=True, prog_bar=False,
                              logger=True, sync_dist=True, batch_size=batch_size)
-                    if name == 'val/mAP':  # for checkpoint callbacks (cannot have '/' in filename)
-                        self.log(f'val_mAP', val,
-                                 on_step=False, on_epoch=True, prog_bar=False,
-                                 logger=True, sync_dist=True, batch_size=batch_size)
+
 
 
     def training_step(self, batch, batch_idx):
@@ -468,6 +481,8 @@ class DetectionLightningModule(pl.LightningModule):
         prog_bar = stage == "val"
         sync_dist = stage == "val"
 
+
+
         metrics_dict = {}
 
         if not preds_attr or not targs_attr:
@@ -497,9 +512,9 @@ class DetectionLightningModule(pl.LightningModule):
             self.log_dict(map_metrics, prog_bar=prog_bar, logger=True, sync_dist=sync_dist, batch_size=1)
             metrics_dict.update(map_metrics)
 
-            # # move preds/targets to CPU once
-            # cpu_preds = [{k: v.cpu() for k, v in p.items()} for p in preds_attr]
-            # cpu_targs = [{k: v.cpu() for k, v in t.items()} for t in targs_attr]
+            if prefix == 'val/' and 'map_50' in metrics:  # cannnot have '/' in filename
+                self.log('val_mAP', m50, on_step=False, on_epoch=True, prog_bar=False, logger=True, sync_dist=True, batch_size=1)
+
 
             ap_small = self.compute_ap_for_area(preds_attr, targs_attr, max_area=32**2)
             precision, recall, f1, avg_iou_tp = self.compute_prf1(preds_attr, targs_attr, iou_threshold=0.5)
@@ -561,6 +576,7 @@ class DetectionLightningModule(pl.LightningModule):
 
 
     def on_validation_epoch_end(self) -> None:
+        if self.trainer.sanity_checking: return # skip
         if self.trainer.is_global_zero:  # only on GPU with rank:0
             self._calc_metrics('val')
             self._slrum_print_metrics()  # in slurm, only print the metrics if we're on gpu:0
@@ -623,7 +639,7 @@ class DetectionLightningModule(pl.LightningModule):
                     primary_metric_val = primary_metric_val.item() if torch.is_tensor(primary_metric_val) else float(primary_metric_val)
                     hp_metrics_to_log["hp_metric"] = primary_metric_val
                 else:  # will remove this later after adding sanity checking for hparams in __init__
-                    log(f"Warning: Specified hparam_primary_metric_name '{self.hparam_primary_metric_name}' "
+                    log(f"Warning: Specified hparam_primary_metric '{self.hparam_primary_metric}' "
                         f"(expected key: '{key_in_final_metrics}') not found in final_metrics. "
                         f"Available keys: {list(final_metrics.keys())}. "
                         f"Setting 'hp/hp_metric' to 0.0 as a fallback.")
@@ -665,45 +681,24 @@ class DetectionLightningModule(pl.LightningModule):
         Configures the optimizer (AdamW) and lr scheduler (linear warmup + cosine ann)
         Handles differential lr for stage 3
         """
-        parameters = []
-        if self.model_stage == 3:
-            log(f'Configuring optimizer for stage {self.model_stage} with differential LRs:')
-            log(f'   Backbone/Stem LR: {self.stem_learning_rate}')
-            log(f'   Main/Transformer/Head LR: {self.learning_rate}')
+        opt_cfg = self.optimizer_config
+        param_groups_for_optimizer = get_optimizer_param_groups(self.model, opt_cfg)
 
-            backbone_params, other_params = [], []
-
-            for name, param in self.model.named_parameters():
-                if not param.requires_grad:
-                    continue
-                if name.startswith('backbone'):
-                    backbone_params.append(param)
-                else:
-                    other_params.append(param)
-
-            if not backbone_params:
-                log("Warning: No parameters found for 'backbone' prefix. Differential LR might not work as expected.")
-            if not other_params:
-                log("Warning: No parameters found for non-backbone parts. Check model structure.")
-
-            parameters_to_opt = [
-                {'params': backbone_params, 'lr': self.stem_learning_rate, 'name': 'backbone'},
-                {'params': other_params, 'lr': self.learning_rate, 'name': 'transformer_head'}
-            ]
-            parameters = [p for p in parameters_to_opt if p['params']]
-
-
-
+        if opt_cfg['name'].lower() == 'adamw':
+            optimizer = optim.AdamW(
+                param_groups_for_optimizer,
+                weight_decay=opt_cfg['weight_decay'],
+            )
+        elif opt_cfg['name'].lower() == 'sgd':
+            optimizer = optim.SGD(
+                param_groups_for_optimizer,
+                momentum=opt_cfg.get('momentum', 0.9),
+                weight_decay=opt_cfg['weight_decay'],
+                nesterov=opt_cfg.get('nesterov', True),
+            )
         else:
-            log(f'Configuring optimizer for stage {self.model_stage} with single LR: {self.learning_rate}')
-            parameters = [p for p in self.model.parameters() if p.requires_grad]
+            raise ValueError(f"Unsupported optimizer: {opt_cfg['name']}")
 
-        # ---- optimizer -----
-        optimizer = optim.AdamW(
-            parameters,
-            lr=self.learning_rate,
-            weight_decay=self.weight_decay,
-        )
 
         if not self.use_scheduler:
             log("Learning rate scheduler is DISABLED by 'use_scheduler=False'.")
@@ -711,6 +706,7 @@ class DetectionLightningModule(pl.LightningModule):
 
         # ---- scheduler calculation -----
         warmup_steps = self.warmup_steps
+        total_training_steps = 0
 
         try:
             if self.trainer and self.trainer.datamodule and hasattr(self.trainer, 'estimated_stepping_batches'):
@@ -1055,6 +1051,8 @@ class DetectionLightningModule(pl.LightningModule):
 
     def _slrum_print_metrics(self):
         """Prints metrics of interest per validation epoch end, only in a slurm env, where pbar is diabled."""
+        if not self.slurm or not self.trainer.is_global_zero or self.trainer.sanity_checking: return
+
         metrics = self.trainer.callback_metrics
         val_loss = metrics.get('val_loss')
         map_50 = metrics.get('val/mAP_0.5')

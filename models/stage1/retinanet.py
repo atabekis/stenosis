@@ -61,6 +61,7 @@ class FPNRetinaNet(nn.Module):
         log(f"  Focal Loss gamma: {focal_loss_gamma}")
         log(f"  Pretrained backbone: {pretrained_backbone}")
         log(f"  Detections per image: {detections_per_img}")
+        log(f"  Use Custom Classification Head: {use_custom_classification_head}")
 
         # 1. backbone & fpn
         self.backbone = EfficientNetFPNBackbone(
@@ -111,4 +112,3 @@ class FPNRetinaNet(nn.Module):
         if isinstance(images, list):
             images = torch.stack(images, dim=0)
         return self.retinanet(images, targets)
-

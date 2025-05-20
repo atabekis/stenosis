@@ -18,7 +18,7 @@ from albumentations.pytorch import ToTensorV2
 from methods.reader import Reader, XCAImage, XCAVideo
 
 from util import log
-from config import CADICA_DATASET_DIR, T_CLIP, DEFAULT_HEIGHT, DEFAULT_WIDTH
+from config import CADICA_DATASET_DIR, T_CLIP, DEFAULT_HEIGHT, DEFAULT_WIDTH, CONTRAST_LEVEL
 
 
 class XCADataset(Dataset):
@@ -67,6 +67,16 @@ class XCADataset(Dataset):
         else:
             self.normalize_params = {'mean': 0.5, 'std': 0.5}
 
+        self.fixed_contrast_transform = None
+        if CONTRAST_LEVEL > 0.0:  # base contrast level adjustment
+            cl_val = float(CONTRAST_LEVEL)
+            self.fixed_contrast_transform = A.RandomBrightnessContrast(
+                brightness_limit=0,
+                contrast_limit=(-cl_val, cl_val),
+                ensure_safe_range=True,
+                p=1.0
+            )
+
         self.base_transform = A.Compose([
             A.Normalize(mean=self.normalize_params['mean'], std=self.normalize_params['std']),
             ToTensorV2()
@@ -76,14 +86,14 @@ class XCADataset(Dataset):
             bbox_params = A.BboxParams(
                 format='pascal_voc',
                 label_fields=['category_ids'],
-                min_visibility=0.25,  # based on my observations, this should not happen (at least in CADICA)
-                min_area=8
+                min_visibility=0.20,  # based on my observations, this should not happen (at least in CADICA)
+                min_area=6
             )
             self.augment_transform = A.ReplayCompose([
                 # geometric
                 A.HorizontalFlip(p=0.4),
                 # A.SafeRotate(limit=15, p=0.5, border_mode=cv2.BORDER_CONSTANT),
-                # A.VerticalFlip(p=0.5),
+                A.VerticalFlip(p=0.5),
                 # A.RandomRotate90(p=0.6),
                 A.Rotate(limit=20, p=0.3),
                 # A.D4(p=0.4),
@@ -101,7 +111,7 @@ class XCADataset(Dataset):
                     A.MedianBlur(blur_limit=3, p=0.3),
                 ], p=0.7),
 
-                A.GaussNoise(std_range=(0.1, 0.3)),
+                # A.GaussNoise(std_range=(0.1, 0.3)),
                 A.CoarseDropout(num_holes_range=(1 ,5),
                                 hole_height_range=(0, int(DEFAULT_HEIGHT * 0.08)), hole_width_range=(0, int(DEFAULT_WIDTH * 0.08)),
                                 fill=0,
@@ -241,6 +251,11 @@ class XCADataset(Dataset):
                 processed_arr = (processed_arr.clip(0, 255) if processed_arr.max() > 1 else processed_arr * 255).astype(
                     np.uint8)
             processed_arr = cv2.cvtColor(processed_arr, code)[..., None]
+
+
+        if self.fixed_contrast_transform:
+            processed_arr = self.fixed_contrast_transform(image=processed_arr)['image']
+
 
         bboxes_for_aug = []
         category_ids_for_aug = []
