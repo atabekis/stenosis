@@ -38,17 +38,21 @@ POSITIVE_CLASS_ID = 1
 
 CONTRAST_LEVEL = 0.00
 
+# May 21 update: sub-segmenting videos
+MIN_SUBSEGMENT_LENGTH = 4 #  frames
+IOU_THRESH_SUBSEGMENT = 1e-6  # basically videos next to each other
+
 
 # ------------ RUN-SPECIFIC CONTROLS --------------#
-DEBUG = True
+DEBUG = False
 DEBUG_SIZE = 0.10  # keep % (DEBUG_SIZE * 100) of data
 
 NUM_WORKERS = get_optimal_workers() if not DEBUG else 4
 
 
 # -------------- MODEL-SPECIFIC CONTROLS ---------- #
-FOCAL_LOSS_ALPHA = 0.75
-FOCAL_LOSS_GAMMA = 1.0
+FOCAL_LOSS_ALPHA = 0.25  # positive anchors weight=alpha, negative anchors weight = 1-alpha
+FOCAL_LOSS_GAMMA = 2.0
 
 DETECTIONS_PER_IMG_AFTER_NMS = 20
 
@@ -78,12 +82,12 @@ OPTIMIZER_CONFIG = {
     'base_lr': 1e-4,
     'weight_decay': 5e-4,
     "differential_lr": {
-        "enabled": False,  # false to use base_lr for all params
+        "enabled": True,  # false to use base_lr for all params
         "lr_backbone": 1e-5,
         "lr_fpn": 5e-5, # 0.5 * base_lr
         "lr_transformer_thanos": 5e-5,  # 0.5 * base_lr
         "lr_regression_head": 1e-4,  # 1.0 * base_lr
-        "lr_classification_head": 5e-6,  # 0.05 * base_lr
+        "lr_classification_head": 1e-5,  # 0.05 * base_lr
         "lr_other": 1e-5  # 0.1 * base_lr
     }
 }
@@ -134,7 +138,7 @@ STAGE2_TSM_RETINANET_DEFAULT_CONFIG = {
     "tsm_shift_fraction": 0.125,
     "tsm_shift_mode": "residual",
     "tsm_effnet_stages_for_tsm": [3, 5, 6],
-    "matcher_high_threshold": 0.4,
+    "matcher_high_threshold": 0.5,
     "matcher_low_threshold": 0.3,
     "matcher_allow_low_quality": True,
     "use_gradient_checkpointing": False,

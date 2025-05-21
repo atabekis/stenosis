@@ -1062,7 +1062,7 @@ class DetectionLightningModule(pl.LightningModule):
         avg_iou_tp = metrics.get('val/AvgIoU_TP_0.5')
         precision_50 = metrics.get('val/Precision_0.5')
         recall_50 = metrics.get('val/Recall_0.5')
-        ap_small = metrics.get('val/AP_Small')
+        ap_small = metrics.get('val/AP_small')
 
         log_message = f"\n--- Epoch {self.current_epoch} Validation Summary (Console Log) ---"
         log_message += f"\n  {'val_loss:':<18} {val_loss:.4f}" if val_loss is not None else "\n  val_loss: N/A"

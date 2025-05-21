@@ -60,6 +60,8 @@ BASE_CONFIG_SINGLE_GPU = {
     'log_dir': LOGS_DIR,
     'num_log_val_images': 2,
     'use_sca': False,
+    'subsegment': False,
+    'iou_split_thresh': 0.01,
 }
 
 BASE_CONFIG_MULTI_GPU = {
@@ -277,6 +279,9 @@ class Experiment:
         reader = Reader(
             dataset_dir=rc['dataset_dir'],
             debug=rc['debug'],
+            iou_split_thresh=rc['iou_split_thresh'],
+            apply_gt_splitting=rc['subsegment']
+
         )
 
         stage = rc['model_stage']
@@ -404,7 +409,7 @@ class Experiment:
     def _print_config_summary(self):
         log('---- Configuration Summary ----')
         for key in (
-            'model_stage', 'debug', 'profiler_enabled', 'pretrained', 'use_sca',
+            'model_stage', 'debug', 'profiler_enabled', 'pretrained', 'use_sca', 'subsegment',
             'max_epochs', 'patience',
             'batch_size',
             'effective_batch_size',
@@ -488,6 +493,8 @@ if __name__ == "__main__":
     parser.add_argument("--weight_decay", type=float, default=None)
     parser.add_argument("--use_scheduler", action=argparse.BooleanOptionalAction, default=True)
 
+
+    parser.add_argument("--subsegment", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--use_augmentation", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--pretrained", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--debug", action=argparse.BooleanOptionalAction, default=DEBUG)
@@ -498,7 +505,6 @@ if __name__ == "__main__":
     parser.add_argument("--deterministic", action=argparse.BooleanOptionalAction, default=False)
 
     # Model specific: general
-
 
     # Model-specific: Stages 2, 3
     parser.add_argument('--use_sca', action=argparse.BooleanOptionalAction, default=False)

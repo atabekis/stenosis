@@ -20,16 +20,28 @@ import config
 from util import log
 from config import DEBUG, DEBUG_SIZE, DEFAULT_WIDTH, DEFAULT_HEIGHT, T_CLIP
 from config import DANILOV_DATASET_DIR, DANILOV_DATASET_PATH, CADICA_DATASET_DIR
-from config import CADICA_NEGATIVE_ONLY_ON_BOTH
+from config import CADICA_NEGATIVE_ONLY_ON_BOTH, MIN_SUBSEGMENT_LENGTH
+
+from methods.video_utils import split_frames_into_subsegments
 
 
 class Reader:
     """
     Reads the dataset directory, finds all .bmp + .xml pairs, and constructs XCAImage objects
     """
-    def __init__(self, dataset_dir=None, debug=DEBUG, cadica_negative_only=CADICA_NEGATIVE_ONLY_ON_BOTH) -> None:
+    def __init__(
+            self,
+            dataset_dir=None,
+            debug=DEBUG,
+            cadica_negative_only=CADICA_NEGATIVE_ONLY_ON_BOTH,
+            iou_split_thresh = 0.01,
+            apply_gt_splitting = True,) -> None:
+
         self.dataset_dir = dataset_dir # can be path to CADICA, DANILOV or BOTH
         self.cadica_negative_only = cadica_negative_only
+
+        self.iou_split_thresh = iou_split_thresh
+        self.apply_gt_splitting = apply_gt_splitting
 
         self.xca_images = []
 
@@ -224,10 +236,19 @@ class Reader:
 
 
 
-    def construct_videos(self, default_width=DEFAULT_WIDTH, default_height=DEFAULT_HEIGHT):
+    def construct_videos(self, default_width=DEFAULT_WIDTH, default_height=DEFAULT_HEIGHT, min_subsegment_len=MIN_SUBSEGMENT_LENGTH):
         """Group XCAImage instances by patient_id and video_id to construct XCAVideo objects"""
 
         log("Constructing XCAVideo sequences from XCA images...")
+
+        if self.apply_gt_splitting:
+            log(f'Sub-segmenting videos based on bounding box movement.')
+            log(f'   IoU threshold: {self.iou_split_thresh},\n    Minimum subsegment length: {min_subsegment_len}')
+        if self.dataset_type == 'CADICA':
+            if self.apply_gt_splitting:
+                log(f'Splitting fragmented videos into subsegments with IoU threshold: {self.iou_split_thresh}')
+
+
 
         videos_dict = defaultdict(list)
         # first we group images by pid, vid
@@ -238,81 +259,95 @@ class Reader:
         for key in videos_dict:
             videos_dict[key].sort(key=lambda x: x.frame_nr)  # sort frames by frame_nr
 
-        # videos = []
+        videos = []
 
         def process_video(key_frames):
             (dataset_source, patient_id, video_id), frames = key_frames
-            frame_count = len(frames)
+            if not frames: return []
 
-            frames_array = np.zeros((frame_count, 1, default_width, default_height), dtype=np.uint8)  # all images to be resized to 512x512
-            original_dimensions = [(frame.width, frame.height) for frame in frames]
+            is_group_lesion_type = any(f.bbox is not None for f in frames)
 
-            has_bbox = all(frame.bbox is not None for frame in frames)
-            bboxes_array = np.zeros((frame_count, 4), dtype=np.int32) if has_bbox else None
+            if self.apply_gt_splitting and dataset_source == 'CADICA' and is_group_lesion_type:
+                subsegments_of_frames = split_frames_into_subsegments(frames, self.iou_split_thresh)
+            else:
+                subsegments_of_frames = [frames]
 
-            # fill the arrays
-            for i, frame in enumerate(frames):
-                img = frame.image
+            video_sub_list = []
+            for sub_idx, frame_subsegment in enumerate(subsegments_of_frames):
+                if not frame_subsegment or len(frame_subsegment) < min_subsegment_len:
+                    continue
 
-                if img.ndim == 3:  # redundancy: check if RGB, if so convert to grayscale
-                    img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                frame_count = len(frame_subsegment)
+                frames_array = np.zeros((frame_count, 1, default_height, default_width), dtype=np.uint8)
+                original_dimensions_sub = [(fr.original_width if fr.original_width else fr.width,
+                                            fr.original_height if fr.original_height else fr.height)
+                                           for fr in frame_subsegment]
 
-                if img.shape[0] != default_width or img.shape[1] != default_height:  # scale the images to 512x512 (for DANILOV only)
-                    scale_factor = min(default_width / img.shape[1], default_height / img.shape[0])
-                    width, height = int(img.shape[1] * scale_factor), int(img.shape[0] * scale_factor)
 
-                    img_resized = cv2.resize(img, (width, height), interpolation=cv2.INTER_AREA)
+                all_frames_have_bbox = all(f.bbox is not None for f in frame_subsegment)
+                bboxes_array = np.zeros((frame_count, 4), dtype=np.int32) if all_frames_have_bbox else None
 
-                    canvas = np.zeros((default_width, default_height), dtype=np.uint8) # create blank canvas
-                    x_offset, y_offset = (default_width - width) // 2, (default_height - height) // 2  # calculate where to place resized img
-                    canvas[y_offset:y_offset + height, x_offset:x_offset + width] = img_resized
-                    img = canvas
+                for i, frame_obj in enumerate(frame_subsegment):
+                    img = frame_obj.image
+                    if img.ndim == 3:
+                        img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-                    # finally, we also need to adjust the bounding box if resized
-                    if has_bbox and frame.bbox:
-                        # original_width, original_height = frame.width, frame.height
-                        if isinstance(frame.bbox[0], tuple) and len(frame.bbox) > 0:  # for danilov there might be multiple bounding boxes (one image)
-                            xmin, ymin, xmax, ymax = frame.bbox[0]
-                        else:
-                            xmin, ymin, xmax, ymax = frame.bbox
+                    if img.shape[0] != default_height or img.shape[1] != default_width:
+                        current_h, current_w = img.shape
+                        scale_factor = min(default_height / current_h, default_width / current_w)
+                        new_w, new_h = int(current_w * scale_factor), int(current_h * scale_factor)
+                        img_resized = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+                        canvas = np.zeros((default_height, default_width), dtype=np.uint8)
+                        y_offset, x_offset = (default_height - new_h) // 2, (default_width - new_w) // 2
+                        canvas[y_offset:y_offset + new_h, x_offset:x_offset + new_w] = img_resized
+                        img = canvas
 
-                        xmin_scaled = int(xmin * scale_factor) + x_offset
-                        ymin_scaled = int(ymin * scale_factor) + y_offset
-                        xmax_scaled = int(xmax * scale_factor) + x_offset
-                        ymax_scaled = int(ymax * scale_factor) + y_offset
-                        bboxes_array[i] = [xmin_scaled, ymin_scaled, xmax_scaled, ymax_scaled]
-                else:
-                    if has_bbox and frame.bbox:
+                        if all_frames_have_bbox and frame_obj.bbox:
+                            current_bbox_to_scale = frame_obj.bbox
+                            if dataset_source == "DANILOV" and isinstance(frame_obj.bbox,
+                                                                          list) and frame_obj.bbox and isinstance(
+                                    frame_obj.bbox[0], tuple):
+                                current_bbox_to_scale = frame_obj.bbox[0]
 
-                        if isinstance(frame.bbox[0], tuple) and len(frame.bbox) > 0:
-                            # danilov has multiple bboxes, take the first one
-                            bboxes_array[i] = np.array(frame.bbox[0])
-                        else:
-                            bboxes_array[i] = np.array(frame.bbox)
+                            xmin, ymin, xmax, ymax = current_bbox_to_scale
+                            xmin_s = xmin * scale_factor + x_offset
+                            ymin_s = ymin * scale_factor + y_offset
+                            xmax_s = xmax * scale_factor + x_offset
+                            ymax_s = ymax * scale_factor + y_offset
+                            bboxes_array[i] = [int(xmin_s), int(ymin_s), int(xmax_s), int(ymax_s)]
+                    else:
+                        if all_frames_have_bbox and frame_obj.bbox:
+                            current_bbox_to_use = frame_obj.bbox
+                            if dataset_source == "DANILOV" and isinstance(frame_obj.bbox,
+                                                                          list) and frame_obj.bbox and isinstance(
+                                    frame_obj.bbox[0], tuple):
+                                current_bbox_to_use = frame_obj.bbox[0]
+                            bboxes_array[i] = np.array(current_bbox_to_use)
 
-                frames_array[i, 0] = img
-            video = XCAVideo(
-                patient_id=patient_id,
-                video_id=video_id,
-                frames=frames_array,
-                bboxes=bboxes_array,
-                original_dimensions=original_dimensions,
-                dataset=dataset_source
-            )
+                    frames_array[i, 0] = img
 
-            for frame in frames:
-                if frame.stenosis_severity is not None:
-                    video.stenosis_severity = frame.stenosis_severity
-                    break
-
-            return video
+                video = XCAVideo(
+                    patient_id=patient_id,
+                    video_id=video_id,
+                    subsegment_id=sub_idx,
+                    frames=frames_array,
+                    bboxes=bboxes_array,
+                    original_dimensions=original_dimensions_sub,
+                    dataset=dataset_source
+                )
+                if frame_subsegment and frame_subsegment[0].stenosis_severity is not None:
+                    video.stenosis_severity = frame_subsegment[0].stenosis_severity
+                video_sub_list.append(video)
+            return video_sub_list
 
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            videos = list(executor.map(process_video, videos_dict.items()))
+             list_of_video_sub_lists = list(executor.map(process_video, videos_dict.items()))
 
-        log(f'Reader constructed {len(videos)} total videos.')
+        for sub_list in list_of_video_sub_lists:
+            videos.extend(sub_list)
 
-        return sorted(videos, key=lambda v: (v.dataset, v.patient_id, v.video_id))
+        log(f'Reader constructed {len(videos)} total XCAVideo sub-segments (after potential splitting).')
+        return sorted(videos, key=lambda v: (v.dataset, v.patient_id, v.video_id, v.subsegment_id))
 
 
     def __repr__(self):
@@ -451,19 +486,21 @@ class XCAVideo:
     """
     Represents a sequence of consequent XCAImage instances from the same patient and video
     """
-    def __init__(self, patient_id, video_id, frames, bboxes, dataset, original_dimensions=None):
+    def __init__(self, patient_id, video_id, frames, bboxes, dataset,
+                 original_dimensions=None, subsegment_id=0):
         self.patient_id, self.video_id = patient_id, video_id
         self.frames, self.bboxes = frames, bboxes  # frames=[frame_count, 1, width, height], bboxes=[frame_count, 4] or None
         self.dataset = dataset
         self.frame_count = frames.shape[0]
         self.has_lesion = bboxes is not None
         self.original_dimensions = original_dimensions
+        self.subsegment_id = subsegment_id
 
         self.stenosis_severity = None  # will extract severity from the first frame (if any)
 
     def __repr__(self):
         shape_str = f"{self.frames.shape[2]}x{self.frames.shape[3]}"
-        return (f"XCAVideo(patient_id={self.patient_id}, video_id={self.video_id}, "
+        return (f"XCAVideo(patient_id={self.patient_id}, video_id={self.video_id}, subsegment={self.subsegment_id}, "
                 f"frame_count={self.frame_count}, shape={shape_str}, has_lesion={self.has_lesion}, "
                 f"stenosis_severity={self.stenosis_severity}, dataset={self.dataset})")
 
