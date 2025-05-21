@@ -243,7 +243,9 @@ class Reader:
 
         if self.apply_gt_splitting:
             log(f'Sub-segmenting videos based on bounding box movement.')
-            log(f'   IoU threshold: {self.iou_split_thresh},\n    Minimum subsegment length: {min_subsegment_len}')
+            log(f'   IoU threshold: {self.iou_split_thresh}')
+            log(f'   Minimum subsegment length: {min_subsegment_len}')
+
         if self.dataset_type == 'CADICA':
             if self.apply_gt_splitting:
                 log(f'Splitting fragmented videos into subsegments with IoU threshold: {self.iou_split_thresh}')
