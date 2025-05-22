@@ -241,15 +241,10 @@ class Reader:
 
         log("Constructing XCAVideo sequences from XCA images...")
 
-        if self.apply_gt_splitting:
+        if self.dataset_type == 'CADICA' and self.apply_gt_splitting:
             log(f'Sub-segmenting videos based on bounding box movement.')
             log(f'   IoU threshold: {self.iou_split_thresh}')
             log(f'   Minimum subsegment length: {min_subsegment_len}')
-
-        if self.dataset_type == 'CADICA':
-            if self.apply_gt_splitting:
-                log(f'Splitting fragmented videos into subsegments with IoU threshold: {self.iou_split_thresh}')
-
 
 
         videos_dict = defaultdict(list)
