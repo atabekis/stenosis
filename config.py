@@ -36,7 +36,11 @@ CLASSES = ['__background__', 'stenosis']  # binary task 1: stenosis, 0: backgrou
 NUM_CLASSES = len(CLASSES)
 POSITIVE_CLASS_ID = 1
 
-CONTRAST_LEVEL = 0.00
+APPLY_ADAPTIVE_CONTRAST = True
+USE_STD_DEV_CHECK_FOR_CLAHE = True # if False, contrast will be applied to every image
+ADAPTIVE_CONTRAST_LOW_STD_THRESH = 25.0  # if std < thresh, contrast is applied
+CLAHE_CLIP_LIMIT = 5.0
+CLAHE_TILE_GRID_SIZE = (8, 8)
 
 # May 21 update: sub-segmenting videos
 MIN_SUBSEGMENT_LENGTH = 4 #  frames

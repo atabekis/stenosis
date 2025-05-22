@@ -18,8 +18,8 @@ from albumentations.pytorch import ToTensorV2
 from methods.reader import Reader, XCAImage, XCAVideo
 
 from util import log
-from config import CADICA_DATASET_DIR, T_CLIP, DEFAULT_HEIGHT, DEFAULT_WIDTH, CONTRAST_LEVEL
-
+from config import T_CLIP, DEFAULT_HEIGHT, DEFAULT_WIDTH
+from config import APPLY_ADAPTIVE_CONTRAST, USE_STD_DEV_CHECK_FOR_CLAHE, ADAPTIVE_CONTRAST_LOW_STD_THRESH, CLAHE_CLIP_LIMIT, CLAHE_TILE_GRID_SIZE
 
 class XCADataset(Dataset):
     """
@@ -67,15 +67,21 @@ class XCADataset(Dataset):
         else:
             self.normalize_params = {'mean': 0.5, 'std': 0.5}
 
-        self.fixed_contrast_transform = None
-        if CONTRAST_LEVEL > 0.0:  # base contrast level adjustment
-            cl_val = float(CONTRAST_LEVEL)
-            self.fixed_contrast_transform = A.RandomBrightnessContrast(
-                brightness_limit=0,
-                contrast_limit=(-cl_val, cl_val),
-                ensure_safe_range=True,
+        if APPLY_ADAPTIVE_CONTRAST:
+            log('Adaptive contrast using CLAHE turned on:', verbose=is_train)  # only print for train dataloader
+            log(f'   Use standard deviation for CLAHE: {USE_STD_DEV_CHECK_FOR_CLAHE}', verbose=is_train)
+            log(f'      Adaptive contrast low std. thresh: {ADAPTIVE_CONTRAST_LOW_STD_THRESH}', verbose=(is_train and USE_STD_DEV_CHECK_FOR_CLAHE))
+            log(f'   CLAHE clip limit: {CLAHE_CLIP_LIMIT}', verbose=is_train)
+            log(f'   CLAHE tile grid size: {CLAHE_TILE_GRID_SIZE}', verbose=is_train)
+
+            self.clahe_instance = A.CLAHE(
+                clip_limit=CLAHE_CLIP_LIMIT,
+                tile_grid_size=CLAHE_TILE_GRID_SIZE,
                 p=1.0
             )
+        else:
+            self.clahe_instance = None
+
 
         self.base_transform = A.Compose([
             A.Normalize(mean=self.normalize_params['mean'], std=self.normalize_params['std']),
@@ -100,7 +106,7 @@ class XCADataset(Dataset):
 
 
                 # pixel-level
-                A.RandomBrightnessContrast(brightness_limit=0.15, contrast_limit=0.5, p=0.75),
+                A.RandomBrightnessContrast(brightness_limit=0.15, contrast_limit=0.15, p=0.75),
                 A.RandomGamma(gamma_limit=(80, 120), p=0.5),
                 A.Sharpen(alpha=(0.2, 0.5), lightness=(0.5, 1.0), p=0.3),
                 A.ImageCompression(quality_range=(80, 99), p=0.5),
@@ -253,8 +259,37 @@ class XCADataset(Dataset):
             processed_arr = cv2.cvtColor(processed_arr, code)[..., None]
 
 
-        if self.fixed_contrast_transform:
-            processed_arr = self.fixed_contrast_transform(image=processed_arr)['image']
+        img_for_contrast = processed_arr
+        if img_for_contrast.dtype != np.uint8:
+            if img_for_contrast.max() <= 1.0 and img_for_contrast.min() >= 0.0 and img_for_contrast.dtype == np.float32:
+                img_for_contrast = (img_for_contrast * 255).clip(0, 255).astype(np.uint8)
+            else:
+                img_for_contrast = img_for_contrast.clip(0, 255).astype(np.uint8)
+
+        if img_for_contrast.ndim == 2:  # ensure we have channel dim if grayscale
+            img_for_contrast  = img_for_contrast[..., None]
+
+
+        if APPLY_ADAPTIVE_CONTRAST:
+            apply_clahe = True
+
+            if USE_STD_DEV_CHECK_FOR_CLAHE:
+                gray_for_analysis = None
+                if img_for_contrast.shape[2] == 3: # 3 ch., should not happen here
+                    gray_for_analysis = cv2.cvtColor(img_for_contrast, cv2.COLOR_BGR2GRAY)
+                elif img_for_contrast.shape[2] == 1: # 1 ch
+                    gray_for_analysis = img_for_contrast.squeeze(axis=2)
+
+                if gray_for_analysis is not None:
+                    std_dev = np.std(gray_for_analysis)
+                    if std_dev > ADAPTIVE_CONTRAST_LOW_STD_THRESH:
+                        apply_clahe = False
+                else:
+                    apply_clahe = False
+
+            if apply_clahe:
+                img_for_contrast = self.clahe_instance(image=img_for_contrast)['image']
+        processed_arr = img_for_contrast
 
 
         bboxes_for_aug = []
