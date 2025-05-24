@@ -18,7 +18,6 @@ from methods.data_module import XCADataModule
 from methods.detector_module import DetectionLightningModule
 
 # Local imports - models
-from models.stage1.faster_rcnn import FasterRCNN
 from models.stage1.retinanet import FPNRetinaNet
 from models.stage2.tsm_retinanet import TSMRetinaNet
 from models.stage3.thanos_detector import THANOSDetector
