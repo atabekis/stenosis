@@ -48,7 +48,7 @@ IOU_THRESH_SUBSEGMENT = 1e-6  # basically videos next to each other
 
 
 # ------------ RUN-SPECIFIC CONTROLS --------------#
-DEBUG = False
+DEBUG = True
 DEBUG_SIZE = 0.10  # keep % (DEBUG_SIZE * 100) of data
 
 NUM_WORKERS = get_optimal_workers() if not DEBUG else 4
@@ -66,14 +66,18 @@ CLS_LOSS_COEF = 2.0
 
 # DEFAULTS
 DEFAULT_WIDTH, DEFAULT_HEIGHT = 512, 512  # pixels
-# DEFAULT_WIDTH, DEFAULT_HEIGHT = 448, 448  # pixels
 
-DEFAULT_ANCHOR_SIZES = ((8, 11, 16), (22, 32, 45), (60, 80, 100))
-# DEFAULT_ANCHOR_SIZES = ((16, 24, 32), (48, 64, 96), (128, 192, 256))
+ANCHOR_SIZES_P345 = ((8, 11, 16), (22, 32, 45), (60, 80, 100))  # for P3, P4 and P5 levels of the PFN (include_p2_pfn = False)
+ANCHOR_SIZES_P2345 = ((4, 5.5, 8), (11, 16, 22), (32, 45, 64), (90, 128, 180))  # add P2 level as well
 
+
+DEFAULT_BACKBONE_VARIANT = 'v2_s'   # can be either 'b0' or 'v2_s'
+INCLUDE_P2_FPN = False
+FPN_OUT_CHANNELS = 256
+
+DEFAULT_ANCHOR_SIZES = ANCHOR_SIZES_P2345 if INCLUDE_P2_FPN else ANCHOR_SIZES_P345
 DEFAULT_ANCHOR_ASPECT_RATIOS = ((0.5, 1.0, 2.0),) * len(DEFAULT_ANCHOR_SIZES)
 
-FPN_OUT_CHANNELS = 256
 
 INFERENCE_SCORE_THRESH = 0.1
 INFERENCE_NMS_THRESH = 0.4
@@ -82,22 +86,31 @@ PRF1_THRESH = 0.1
 # -------- SHARED BASE CONFIG -------- #
 
 OPTIMIZER_CONFIG = {
-    'name': 'AdamW',
-    'base_lr': 1e-4,
+    'name': 'Adamw',
+    'base_lr': 5e-4,
     'weight_decay': 5e-4,
     "differential_lr": {
-        "enabled": True,  # false to use base_lr for all params
-        "lr_backbone": 1e-5,
-        "lr_fpn": 5e-5, # 0.5 * base_lr
-        "lr_transformer_thanos": 5e-5,  # 0.5 * base_lr
-        "lr_regression_head": 1e-4,  # 1.0 * base_lr
-        "lr_classification_head": 1e-5,  # 0.05 * base_lr
-        "lr_other": 1e-5  # 0.1 * base_lr
+        "enabled": False,  # false to use base_lr for all params
+        "lr_backbone": 1e-4,
+        "lr_fpn": 1e-4,
+        "lr_transformer_thanos": 5e-5,
+        "lr_regression_head": 1e-4,
+        "lr_classification_head": 5e-5,
+        "lr_other": 1e-5
     }
 }
 
-COMMON_RETINANET_CONFIG = {
+
+COMMON_BACKBONE_FPN_CONFIG = {
+    "backbone_variant": DEFAULT_BACKBONE_VARIANT,
+    "include_p2_fpn": INCLUDE_P2_FPN,
     "fpn_out_channels": FPN_OUT_CHANNELS,
+    "pretrained_backbone": True,
+}
+
+
+COMMON_RETINANET_CONFIG = {
+    **COMMON_BACKBONE_FPN_CONFIG,
     "num_classes": NUM_CLASSES,
     "anchor_sizes": DEFAULT_ANCHOR_SIZES,
     "anchor_aspect_ratios": DEFAULT_ANCHOR_ASPECT_RATIOS,
@@ -106,12 +119,11 @@ COMMON_RETINANET_CONFIG = {
     "inference_score_thresh": INFERENCE_SCORE_THRESH,
     "inference_nms_thresh": INFERENCE_NMS_THRESH,
     "inference_detections_per_img": DETECTIONS_PER_IMG_AFTER_NMS,
-    "pretrained_backbone": True,
 }
 
 
 CUSTOM_CLS_HEAD_CONFIG = {
-    "custom_head":  True,
+    "custom_head":  False,
 
     "classification_head_dropout_p": 0.3,
     "classification_head_num_convs": 4,

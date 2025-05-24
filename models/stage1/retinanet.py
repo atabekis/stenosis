@@ -11,6 +11,7 @@ from typing import Union, Optional
 
 # Backbone model
 from models.stage1.backbone import EfficientNetFPNBackbone
+from models.stage1.backbone_v2 import EfficientNetFPNBackbone as BackboneV2
 from models.common.retinanet_utils import GNDropoutRetinaNetClassificationHead
 
 # Local imports
@@ -30,18 +31,23 @@ class FPNRetinaNet(nn.Module):
         """
         super().__init__()
 
-
-        num_classes = config.get("num_classes")
-        fpn_out_channels = config.get("fpn_out_channels", 256)
+        # RetinaNet-specific parameters
+        num_classes = config["num_classes"]
         anchor_sizes = config["anchor_sizes"]
         anchor_aspect_ratios = config["anchor_aspect_ratios"]
         score_thresh = config.get("inference_score_thresh", 0.3)
         nms_thresh = config.get("inference_nms_thresh", 0.4)
         focal_loss_alpha = config.get("focal_loss_alpha")
         focal_loss_gamma = config.get("focal_loss_gamma")
-        pretrained_backbone = config.get("pretrained_backbone", True)
         detections_per_img = config.get("inference_detections_per_img")
 
+        # Backbone-specific parameters
+        backbone_variant = config.get("backbone_variant", "b0") # default to b0
+        include_p2_fpn = config.get("include_p2_fpn", False) # default to false
+        fpn_out_channels = config.get("fpn_out_channels", 256)
+        pretrained_backbone = config.get("pretrained_backbone", True)
+
+        # Classification head specific parameters
         use_custom_classification_head = config.get("custom_head", False)
         classification_head_dropout_p = config.get("classification_head_dropout_p", 0.0)
         classification_head_num_convs = config.get("classification_head_num_convs", 4)
@@ -49,9 +55,10 @@ class FPNRetinaNet(nn.Module):
         classification_head_num_gn_groups = config.get("classification_head_num_gn_groups", 32)
 
 
-
         log("Initializing FPNRetinaNet with parameters:")
         log(f"  Num classes: {num_classes}")
+        log(f"  Backbone variant: {backbone_variant}")
+        log(f"  Include P2 in FPN: {include_p2_fpn}")
         log(f"  FPN out channels: {fpn_out_channels}")
         log(f"  Anchor sizes: {anchor_sizes}")
         log(f"  Anchor aspect ratios: {anchor_aspect_ratios}")
@@ -64,9 +71,11 @@ class FPNRetinaNet(nn.Module):
         log(f"  Use Custom Classification Head: {use_custom_classification_head}")
 
         # 1. backbone & fpn
-        self.backbone = EfficientNetFPNBackbone(
+        self.backbone = BackboneV2(
+            variant=backbone_variant,
             out_channels=fpn_out_channels,
             pretrained=pretrained_backbone,
+            include_p2=include_p2_fpn,
         )
 
         # 2. anchor generator
