@@ -66,7 +66,6 @@ class Reader:
             self._load_both(self.cadica_negative_only)
 
 
-
     def _load_danilov(self, dataset_dir) -> list['XCAImage']:
         """
         Loads the dataset from the merged CSV file, groups by filename to
@@ -276,52 +275,24 @@ class Reader:
 
                 frame_count = len(frame_subsegment)
                 frames_array = np.zeros((frame_count, 1, default_height, default_width), dtype=np.uint8)
-                original_dimensions_sub = [(fr.original_width if fr.original_width else fr.width,
-                                            fr.original_height if fr.original_height else fr.height)
-                                           for fr in frame_subsegment]
-
+                original_dimensions_sub = [(fr.original_width, fr.original_height) for fr in frame_subsegment]
 
                 all_frames_have_bbox = all(f.bbox is not None for f in frame_subsegment)
                 bboxes_array = np.zeros((frame_count, 4), dtype=np.int32) if all_frames_have_bbox else None
 
                 for i, frame_obj in enumerate(frame_subsegment):
-                    img = frame_obj.image
-                    if img.ndim == 3:
-                        img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                    # image is already resized, grayscale, and padded in XCAImage object
+                    frames_array[i, 0] = frame_obj.image
 
-                    if img.shape[0] != default_height or img.shape[1] != default_width:
-                        current_h, current_w = img.shape
-                        scale_factor = min(default_height / current_h, default_width / current_w)
-                        new_w, new_h = int(current_w * scale_factor), int(current_h * scale_factor)
-                        img_resized = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
-                        canvas = np.zeros((default_height, default_width), dtype=np.uint8)
-                        y_offset, x_offset = (default_height - new_h) // 2, (default_width - new_w) // 2
-                        canvas[y_offset:y_offset + new_h, x_offset:x_offset + new_w] = img_resized
-                        img = canvas
+                    if all_frames_have_bbox and frame_obj.bbox is not None:
+                        current_bbox_to_use = frame_obj.bbox
+                        if (
+                            frame_obj.dataset == "DANILOV"
+                            and isinstance(frame_obj.bbox, list)
+                            and frame_obj.bbox and isinstance(frame_obj.bbox[0], tuple)):
+                            current_bbox_to_use = frame_obj.bbox[0] # if danilov has multiple bboxes pick the first one
 
-                        if all_frames_have_bbox and frame_obj.bbox:
-                            current_bbox_to_scale = frame_obj.bbox
-                            if dataset_source == "DANILOV" and isinstance(frame_obj.bbox,
-                                                                          list) and frame_obj.bbox and isinstance(
-                                    frame_obj.bbox[0], tuple):
-                                current_bbox_to_scale = frame_obj.bbox[0]
-
-                            xmin, ymin, xmax, ymax = current_bbox_to_scale
-                            xmin_s = xmin * scale_factor + x_offset
-                            ymin_s = ymin * scale_factor + y_offset
-                            xmax_s = xmax * scale_factor + x_offset
-                            ymax_s = ymax * scale_factor + y_offset
-                            bboxes_array[i] = [int(xmin_s), int(ymin_s), int(xmax_s), int(ymax_s)]
-                    else:
-                        if all_frames_have_bbox and frame_obj.bbox:
-                            current_bbox_to_use = frame_obj.bbox
-                            if dataset_source == "DANILOV" and isinstance(frame_obj.bbox,
-                                                                          list) and frame_obj.bbox and isinstance(
-                                    frame_obj.bbox[0], tuple):
-                                current_bbox_to_use = frame_obj.bbox[0]
-                            bboxes_array[i] = np.array(current_bbox_to_use)
-
-                    frames_array[i, 0] = img
+                        bboxes_array[i] = np.array(current_bbox_to_use, dtype=np.int32)
 
                 video = XCAVideo(
                     patient_id=patient_id,
@@ -332,6 +303,8 @@ class Reader:
                     original_dimensions=original_dimensions_sub,
                     dataset=dataset_source
                 )
+
+
                 if frame_subsegment and frame_subsegment[0].stenosis_severity is not None:
                     video.stenosis_severity = frame_subsegment[0].stenosis_severity
                 video_sub_list.append(video)
@@ -396,7 +369,6 @@ class XCAImage:
 
         row = bbox_rows.iloc[0]
         instance.filename = row['filename']
-        instance.width, instance.height = int(row['width']), int(row['height'])
         instance.stenosis_severity = None
 
         instance._parse_filename()
@@ -405,9 +377,13 @@ class XCAImage:
         instance.image = cv2.imread(instance.path, cv2.IMREAD_UNCHANGED)
         if instance.image is None:
             raise IOError(f"Could not read image file: {instance.path}")
+
         for _, r in bbox_rows.iterrows():
             xmin, ymin, xmax, ymax = map(int, (r['xmin'], r['ymin'], r['xmax'], r['ymax']))
             instance.bbox.append((xmin, ymin, xmax, ymax))
+
+
+        instance._resize_to_default()
         return instance
 
     @classmethod
@@ -417,7 +393,6 @@ class XCAImage:
         instance.dataset = "CADICA"
 
         instance.filename = path.name
-        instance.width, instance.height = 512, 512  # set for all images
 
         instance._parse_filename()
         instance._parse_annotation(annotation=annotation)  # for severity and bbox
@@ -426,6 +401,8 @@ class XCAImage:
         instance.image = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
         if instance.image is None:
             raise IOError(f"Could not read image file: {path}")
+
+        instance._resize_to_default()
         return instance
 
     def _parse_annotation(self, annotation: str | None):
@@ -462,15 +439,62 @@ class XCAImage:
             raise ValueError(f"filename {self.filename} does not match the expected pattern.")
 
 
-    def get_image(self):
-        """
-        Lazy-loads and returns the image using cv2.imread."""
-        return DeprecationWarning
-        # if self.image is None:
-        #     self.image = cv2.imread(self.path, cv2.IMREAD_UNCHANGED)
-        #     if self.image is None:
-        #         raise IOError(f"Could not read image file: {self.path}")
-        # return self.image
+    def _resize_to_default(self):
+        """Resizes the loaded self.image to DEFAULT_WIDTH and DEFAULT_HEIGHT, adjusts the bboxes (if any) accordingly"""
+
+        if self.image.ndim == 3:  # ensuring image is grayscale
+            if self.image.shape[2] == 3:  #bgr
+                self.image = cv2.cvtColor(self.image, cv2.COLOR_BGR2GRAY)
+            elif self.image.shape[2] == 4: #bgra
+                self.image = cv2.cvtColor(self.image, cv2.COLOR_BGRA2GRAY)
+
+        current_h, current_w = self.image.shape[:2]
+        self.original_height, self.original_width = current_h, current_w
+
+        if current_h == DEFAULT_HEIGHT and current_w == DEFAULT_WIDTH:  # already expected format
+            self.width, self.height = DEFAULT_WIDTH, DEFAULT_HEIGHT
+            return
+
+        scale_factor = min(DEFAULT_HEIGHT / current_h, DEFAULT_WIDTH / current_w)  # scaling with padding
+        new_h, new_w = int(current_h * scale_factor), int(current_w * scale_factor)
+
+        img_resized = cv2.resize(self.image, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+        # create canvas of the def. size and img original dtype
+        canvas = np.zeros((DEFAULT_HEIGHT, DEFAULT_WIDTH), dtype=self.image.dtype)
+        y_offset = (DEFAULT_HEIGHT - new_h) // 2
+        x_offset = (DEFAULT_WIDTH - new_w) // 2
+        canvas[y_offset:y_offset + new_h, x_offset:x_offset + new_w] = img_resized
+
+        self.image = canvas
+        self.height, self.width = DEFAULT_HEIGHT, DEFAULT_WIDTH
+
+        if self.bbox:
+            resized_bboxes, boxes_to_iter = [], None
+
+            if self.dataset == 'DANILOV': boxes_to_iter = self.bbox
+            elif self.dataset == 'CADICA'  and isinstance(self.bbox, list) and len(self.bbox) == 4:
+                boxes_to_iter = [tuple(self.bbox)]
+
+            if boxes_to_iter:
+                for xmin, ymin, xmax, ymax in boxes_to_iter:
+                    xmin_s = xmin * scale_factor + x_offset
+                    ymin_s = ymin * scale_factor + y_offset
+                    xmax_s = xmax * scale_factor + x_offset
+                    ymax_s = ymax * scale_factor + y_offset
+                    resized_bboxes.append((int(xmin_s), int(ymin_s), int(xmax_s), int(ymax_s)))
+
+                if self.dataset == "DANILOV":
+                    self.bbox = resized_bboxes  # store as list of tuples
+                elif self.dataset == "CADICA":
+                    if resized_bboxes:  # one bbox
+                        self.bbox = list(resized_bboxes[0])
+
+
+
+
+
+
 
     def __repr__(self):
         return (f"XCAImage(patient={self.patient_id}, video={self.video_id}, frame={self.frame_nr}, "
