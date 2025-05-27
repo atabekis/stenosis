@@ -4,7 +4,7 @@
 import os
 import sys
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import Optional, Union
 
 # Torch imports
 import torch
@@ -28,7 +28,7 @@ def train_model(
         patience: int = 10,
         gradient_clip_val: float = 1.0,
         use_augmentation: bool = True,
-        gpus: Optional[Union[int, List[int]]] = None,
+        gpus: Optional[Union[int, list[int]]] = None,
         precision: Optional[str] = None,
         accumulate_grad_batches: int = 1,
         strategy: Optional[str] = None,
@@ -128,6 +128,8 @@ def train_model(
             log(f"Error configuring PyTorchProfiler: {e}. Disabling profiler.")
             profiler = None
 
+    accelerator_arg, devices_arg, estimated_num_devices = _determine_device_config(gpus)
+
     trainer_kwargs = {
         'max_epochs': max_epochs,
         'gradient_clip_val': gradient_clip_val,
@@ -138,36 +140,24 @@ def train_model(
         'accumulate_grad_batches': accumulate_grad_batches,
         'precision': precision,
         'enable_progress_bar': enable_pbar, # if SLURM env. do not print pbar
-        'profiler': profiler
+        'profiler': profiler,
+        'num_nodes': 1,  # will need to change this if using more than one node on HPC
+        'accelerator': accelerator_arg,
+        'devices': devices_arg,
     }
 
-    if gpus == 0: # CPU
-        trainer_kwargs['accelerator'] = 'cpu'
-        trainer_kwargs['devices'] = '1'
-    elif isinstance(gpus, (int, list)) and gpus != 0:
-        if not torch.cuda.is_available():
-            print("Warning: GPUs requested but CUDA not available. Falling back to CPU.")
-            trainer_kwargs['accelerator'] = 'cpu'
-            trainer_kwargs['devices'] = 1
-        else:
-            trainer_kwargs['accelerator'] = 'gpu'
-            trainer_kwargs['devices'] = gpus
-    else:
-        trainer_kwargs['accelerator'] = 'auto'
-        trainer_kwargs['devices'] = 'auto'
 
+    ddp_config = {"find_unused_parameters": True} # Example, can be made more configurable
 
-    final_strategy = None
     if strategy:
-        if strategy.lower() == 'ddp':
-             final_strategy = DDPStrategy(find_unused_parameters=True)
+        strategy_lower = strategy.lower()
+        if strategy_lower == "ddp":
+            trainer_kwargs['strategy'] = DDPStrategy(**ddp_config)
         else:
-            final_strategy = strategy
-    elif isinstance(trainer_kwargs.get('devices'), list) and len(trainer_kwargs['devices']) > 1:
-        print("Auto-configuring DDP strategy for multi-GPU.")
-        final_strategy = DDPStrategy(find_unused_parameters=True)
-    if final_strategy is not None:
-        trainer_kwargs['strategy'] = final_strategy
+            trainer_kwargs['strategy'] = strategy
+            log(f"Using strategy: {strategy}")
+    elif accelerator_arg == "gpu" and estimated_num_devices > 1:
+        trainer_kwargs['strategy'] = DDPStrategy(**ddp_config)
 
 
     trainer = pl.Trainer(**trainer_kwargs)
@@ -208,3 +198,49 @@ def train_model(
 
 
 
+def _determine_device_config(gpus_param: Optional[Union[int, list[int], str]]) -> tuple[str, Union[int, list[int], str], int]:
+    """
+    Determines accelerator, trainer_devices_arg, and estimated_num_devices.
+    """
+    cuda_available = torch.cuda.is_available()
+    num_gpus = torch.cuda.device_count() if cuda_available else 0
+
+    # cpu-only override
+    if gpus_param == 0 or not cuda_available:
+        if gpus_param != 0:
+            log("Warning: GPUs requested but CUDA not available. Falling back to CPU.")
+        return "cpu", 1, 1
+
+    # auto selection
+    if gpus_param is None or (isinstance(gpus_param, str) and gpus_param.lower() == "auto"):
+        return "gpu", "auto", num_gpus
+
+    # handle integer gpu count
+    if isinstance(gpus_param, int):
+        count = min(gpus_param, num_gpus)
+        if gpus_param > num_gpus:
+            log(f"Warning: Requested {gpus_param} GPUs; only {num_gpus} available. Using {count}.")
+        return "gpu", count, count
+
+    # normalize list of indices or comma-separated str
+    indices: list[int]
+    if isinstance(gpus_param, str):
+        try:
+            indices = [int(x) for x in gpus_param.split(',') if x.strip()]
+        except ValueError:
+            log(f"Error parsing GPU string '{gpus_param}'. Defaulting to 'auto'.")
+            return "gpu", "auto", num_gpus
+    elif isinstance(gpus_param, list):
+        indices = gpus_param
+    else:
+        log(f"Warning: Unexpected type {type(gpus_param)} for 'gpus'; defaulting to 'auto'.")
+        return "gpu", "auto", num_gpus
+
+    # validate indices
+    valid = [i for i in indices if 0 <= i < num_gpus]
+    if not valid:
+        log(f"Warning: No valid GPU indices in {indices}. Using all {num_gpus} GPUs.")
+        return "gpu", "auto", num_gpus
+    if len(valid) != len(indices):
+        log(f"Warning: Some indices invalid. Requested {indices}; valid: {valid}.")
+    return "gpu", valid, len(valid)

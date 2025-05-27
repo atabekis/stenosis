@@ -48,7 +48,7 @@ IOU_THRESH_SUBSEGMENT = 1e-6  # basically videos next to each other
 
 
 # ------------ RUN-SPECIFIC CONTROLS --------------#
-DEBUG = True
+DEBUG = False
 DEBUG_SIZE = 0.10  # keep % (DEBUG_SIZE * 100) of data
 
 NUM_WORKERS = get_optimal_workers() if not DEBUG else 4
@@ -71,7 +71,7 @@ ANCHOR_SIZES_P345 = ((8, 11, 16), (22, 32, 45), (60, 80, 100))  # for P3, P4 and
 ANCHOR_SIZES_P2345 = ((4, 5.5, 8), (11, 16, 22), (32, 45, 64), (90, 128, 180))  # add P2 level as well
 
 
-DEFAULT_BACKBONE_VARIANT = 'v2_s'   # can be either 'b0' or 'v2_s'
+DEFAULT_BACKBONE_VARIANT = 'b0'   # can be either 'b0' or 'v2_s'
 INCLUDE_P2_FPN = False
 FPN_OUT_CHANNELS = 256
 
@@ -90,7 +90,7 @@ OPTIMIZER_CONFIG = {
     'base_lr': 5e-4,
     'weight_decay': 5e-4,
     "differential_lr": {
-        "enabled": False,  # false to use base_lr for all params
+        "enabled": True,  # false to use base_lr for all params
         "lr_backbone": 1e-4,
         "lr_fpn": 1e-4,
         "lr_transformer_thanos": 5e-5,
@@ -123,7 +123,7 @@ COMMON_RETINANET_CONFIG = {
 
 
 CUSTOM_CLS_HEAD_CONFIG = {
-    "custom_head":  False,
+    "custom_head":  True,
 
     "classification_head_dropout_p": 0.3,
     "classification_head_num_convs": 4,
