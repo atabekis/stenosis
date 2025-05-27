@@ -240,10 +240,9 @@ class Reader:
 
         log("Constructing XCAVideo sequences from XCA images...")
 
-        if self.dataset_type == 'CADICA' and self.apply_gt_splitting:
-            log(f'Sub-segmenting videos based on bounding box movement.')
-            log(f'   IoU threshold: {self.iou_split_thresh}')
-            log(f'   Minimum subsegment length: {min_subsegment_len}')
+        log(f'Sub-segmenting videos based on bounding box movement.', verbose=self.apply_gt_splitting)  # will only print if apply_gt_splitting
+        log(f'   IoU threshold: {self.iou_split_thresh}', verbose=self.apply_gt_splitting)
+        log(f'   Minimum subsegment length: {min_subsegment_len}', verbose=self.apply_gt_splitting)
 
 
         videos_dict = defaultdict(list)
@@ -263,7 +262,7 @@ class Reader:
 
             is_group_lesion_type = any(f.bbox is not None for f in frames)
 
-            if self.apply_gt_splitting and dataset_source == 'CADICA' and is_group_lesion_type:
+            if self.apply_gt_splitting and is_group_lesion_type:
                 subsegments_of_frames = split_frames_into_subsegments(frames, self.iou_split_thresh)
             else:
                 subsegments_of_frames = [frames]
@@ -378,10 +377,10 @@ class XCAImage:
         if instance.image is None:
             raise IOError(f"Could not read image file: {instance.path}")
 
-        for _, r in bbox_rows.iterrows():
+        if not bbox_rows.empty:
+            r = bbox_rows.iloc[0]  # one image in danilov has 2 bboxes, we take one
             xmin, ymin, xmax, ymax = map(int, (r['xmin'], r['ymin'], r['xmax'], r['ymax']))
-            instance.bbox.append((xmin, ymin, xmax, ymax))
-
+            instance.bbox = [xmin, ymin, xmax, ymax]
 
         instance._resize_to_default()
         return instance
@@ -470,29 +469,14 @@ class XCAImage:
         self.height, self.width = DEFAULT_HEIGHT, DEFAULT_WIDTH
 
         if self.bbox:
-            resized_bboxes, boxes_to_iter = [], None
+            xmin, ymin, xmax, ymax = self.bbox
 
-            if self.dataset == 'DANILOV': boxes_to_iter = self.bbox
-            elif self.dataset == 'CADICA'  and isinstance(self.bbox, list) and len(self.bbox) == 4:
-                boxes_to_iter = [tuple(self.bbox)]
+            xmin_s = xmin * scale_factor + x_offset
+            ymin_s = ymin * scale_factor + y_offset
+            xmax_s = xmax * scale_factor + x_offset
+            ymax_s = ymax * scale_factor + y_offset
 
-            if boxes_to_iter:
-                for xmin, ymin, xmax, ymax in boxes_to_iter:
-                    xmin_s = xmin * scale_factor + x_offset
-                    ymin_s = ymin * scale_factor + y_offset
-                    xmax_s = xmax * scale_factor + x_offset
-                    ymax_s = ymax * scale_factor + y_offset
-                    resized_bboxes.append((int(xmin_s), int(ymin_s), int(xmax_s), int(ymax_s)))
-
-                if self.dataset == "DANILOV":
-                    self.bbox = resized_bboxes  # store as list of tuples
-                elif self.dataset == "CADICA":
-                    if resized_bboxes:  # one bbox
-                        self.bbox = list(resized_bboxes[0])
-
-
-
-
+            self.bbox = [int(xmin_s), int(ymin_s), int(xmax_s), int(ymax_s)]
 
 
 
