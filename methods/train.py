@@ -128,7 +128,7 @@ def train_model(
             log(f"Error configuring PyTorchProfiler: {e}. Disabling profiler.")
             profiler = None
 
-    accelerator_arg, devices_arg, estimated_num_devices = _determine_device_config(gpus)
+    accelerator_arg, devices_arg, estimated_num_devices = determine_device_config(gpus)
 
     trainer_kwargs = {
         'max_epochs': max_epochs,
@@ -198,49 +198,65 @@ def train_model(
 
 
 
-def _determine_device_config(gpus_param: Optional[Union[int, list[int], str]]) -> tuple[str, Union[int, list[int], str], int]:
-    """
-    Determines accelerator, trainer_devices_arg, and estimated_num_devices.
-    """
-    cuda_available = torch.cuda.is_available()
-    num_gpus = torch.cuda.device_count() if cuda_available else 0
 
-    # cpu-only override
+def determine_device_config(
+    gpus_param: Optional[Union[int, list[int], str]]
+) -> tuple[str, Union[int, list[int], str], int]:
+    cuda_available = torch.cuda.is_available()
+    num_visible = torch.cuda.device_count() if cuda_available else 0
+
+    # --- SLURM multi-task logic ---
+    if "SLURM_JOB_ID" in os.environ and int(os.environ.get("SLURM_NTASKS_PER_NODE", "1")) > 1:
+        if num_visible > 0:
+            log(f"SLURM multi-task: this task sees {num_visible} GPU(s).")
+            return "gpu", num_visible, num_visible
+        log("SLURM multi-task, but no GPUs visible or CUDA unavailable. Using CPU.")
+        return "cpu", 1, 1
+
+    # --- No gpus requested or available ---
     if gpus_param == 0 or not cuda_available:
-        if gpus_param != 0:
+        if gpus_param not in (0, None) and not cuda_available:
             log("Warning: GPUs requested but CUDA not available. Falling back to CPU.")
         return "cpu", 1, 1
 
-    # auto selection
+    # --- auto gpu (None or auto) ---
     if gpus_param is None or (isinstance(gpus_param, str) and gpus_param.lower() == "auto"):
-        return "gpu", "auto", num_gpus
+        return "gpu", "auto", num_visible
 
-    # handle integer gpu count
+    # --- int gpu count ---
     if isinstance(gpus_param, int):
-        count = min(gpus_param, num_gpus)
-        if gpus_param > num_gpus:
-            log(f"Warning: Requested {gpus_param} GPUs; only {num_gpus} available. Using {count}.")
+        count = min(gpus_param, num_visible)
+        if gpus_param > num_visible:
+            log(f"Warning: Requested {gpus_param} GPUs; only {num_visible} available. Using {count}.")
         return "gpu", count, count
 
-    # normalize list of indices or comma-separated str
+    # --- parse list or comma-sep string into indices ---
     indices: list[int]
     if isinstance(gpus_param, str):
         try:
-            indices = [int(x) for x in gpus_param.split(',') if x.strip()]
+            indices = [int(x) for x in gpus_param.split(",") if x.strip() != ""]
+            if not indices:
+                raise ValueError
         except ValueError:
             log(f"Error parsing GPU string '{gpus_param}'. Defaulting to 'auto'.")
-            return "gpu", "auto", num_gpus
+            return "gpu", "auto", num_visible
+
     elif isinstance(gpus_param, list):
         indices = gpus_param
     else:
-        log(f"Warning: Unexpected type {type(gpus_param)} for 'gpus'; defaulting to 'auto'.")
-        return "gpu", "auto", num_gpus
+        log(f"Warning: Unexpected type {type(gpus_param)} for `gpus`. Defaulting to 'auto'.")
+        return "gpu", "auto", num_visible
 
     # validate indices
-    valid = [i for i in indices if 0 <= i < num_gpus]
+    valid = [i for i in indices if 0 <= i < num_visible]
     if not valid:
-        log(f"Warning: No valid GPU indices in {indices}. Using all {num_gpus} GPUs.")
-        return "gpu", "auto", num_gpus
+        if indices:
+            log(f"Warning: No valid GPU indices in {indices} for {num_visible} available GPUs. Using 'auto'.")
+        else:
+            log("Warning: Empty GPU list provided. Using 'auto'.")
+        return "gpu", "auto", num_visible
+
     if len(valid) != len(indices):
-        log(f"Warning: Some indices invalid. Requested {indices}; valid: {valid}.")
+        log(f"Warning: Some indices invalid. Requested {indices}; using valid subset: {valid}.")
+
     return "gpu", valid, len(valid)
