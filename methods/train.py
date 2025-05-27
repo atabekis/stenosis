@@ -78,16 +78,16 @@ def train_model(
 
     logger = TensorBoardLogger(save_dir=log_dir, name=experiment_name)
 
-    checkpoint_callback_map = ModelCheckpoint(
-        filename=model.__class__.__name__ + '-{epoch:02d}-{val_mAP:.4f}',
-        save_top_k=3,
-        verbose=True,
-        monitor='val_mAP',
-        mode='max',
-        save_on_train_epoch_end=False,
-        every_n_epochs=1,
-        save_last=True,
-    )
+    # checkpoint_callback_map = ModelCheckpoint(
+    #     filename=model.__class__.__name__ + '-{epoch:02d}-{val_mAP:.4f}',
+    #     save_top_k=3,
+    #     verbose=True,
+    #     monitor='val_mAP',
+    #     mode='max',
+    #     save_on_train_epoch_end=False,
+    #     every_n_epochs=1,
+    #     save_last=True,
+    # )
 
     checkpoint_callback_val = ModelCheckpoint(
         filename=model.__class__.__name__ + '-{epoch:02d}-{val_loss:.4f}',
@@ -133,7 +133,7 @@ def train_model(
     trainer_kwargs = {
         'max_epochs': max_epochs,
         'gradient_clip_val': gradient_clip_val,
-        'callbacks': [checkpoint_callback_map, checkpoint_callback_val, early_stop_callback, ],
+        'callbacks': [checkpoint_callback_val, early_stop_callback, ],
         'logger': logger,
         'log_every_n_steps': 10,
         'deterministic': deterministic,
@@ -147,7 +147,7 @@ def train_model(
     }
 
 
-    ddp_config = {"find_unused_parameters": True} # Example, can be made more configurable
+    ddp_config = {"find_unused_parameters": False}
 
     if strategy:
         strategy_lower = strategy.lower()
@@ -162,7 +162,7 @@ def train_model(
 
     trainer = pl.Trainer(**trainer_kwargs)
 
-    checkpoint_callback = checkpoint_callback_map  # TODO: add control between two callbacks
+    checkpoint_callback = checkpoint_callback_val  # TODO: add control between two callbacks
 
     results_dict =  {
         "trainer": trainer,
