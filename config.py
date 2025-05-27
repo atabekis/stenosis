@@ -49,7 +49,7 @@ IOU_THRESH_SUBSEGMENT = 1e-6  # basically videos next to each other
 
 # ------------ RUN-SPECIFIC CONTROLS --------------#
 DEBUG = False
-DEBUG_SIZE = 0.10  # keep % (DEBUG_SIZE * 100) of data
+DEBUG_SIZE = 0.010  # keep % (DEBUG_SIZE * 100) of data
 
 NUM_WORKERS = get_optimal_workers() if not DEBUG else 4
 
@@ -67,8 +67,13 @@ CLS_LOSS_COEF = 2.0
 # DEFAULTS
 DEFAULT_WIDTH, DEFAULT_HEIGHT = 512, 512  # pixels
 
+# ANCHOR SIZES FOR 512x512 IMAGES
 ANCHOR_SIZES_P345 = ((8, 11, 16), (22, 32, 45), (60, 80, 100))  # for P3, P4 and P5 levels of the PFN (include_p2_pfn = False)
 ANCHOR_SIZES_P2345 = ((4, 5.5, 8), (11, 16, 22), (32, 45, 64), (90, 128, 180))  # add P2 level as well
+
+# ANCHOR SIZES FOR 1024x1024 IMAGES
+# ANCHOR_SIZES_P345 = ((24, 32, 48, 64), (80, 96, 128), (160, 192, 224))
+# ANCHOR_SIZES_P2345 = ((16, 22, 32), (48, 64, 80), (96, 128, 160), (192, 224, 256))
 
 
 DEFAULT_BACKBONE_VARIANT = 'b0'   # can be either 'b0' or 'v2_s'

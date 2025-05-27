@@ -121,9 +121,6 @@ class Experiment:
         if cfg['model_stage'] not in (1, 2, 3):
             raise ValueError(f"Invalid model_stage: {cfg['model_stage']}. Must be 1, 2, or 3.")
 
-        # if cfg['model_stage'] == 1 and str(cfg['dataset_dir']).upper() == 'BOTH':
-        #     raise NotImplementedError('Using both datasets for Stage 1 is not implemented.')
-
         # if profiler is on but no schedule, fill in default
         if cfg.get('profiler_enabled') and 'profiler_scheduler_conf' not in cfg:
             cfg['profiler_scheduler_conf'] = DEFAULT_PROFILER_SCHEDULER

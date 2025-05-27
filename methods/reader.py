@@ -51,7 +51,8 @@ class Reader:
             log(f'Debug mode turned on, sampling {int(DEBUG_SIZE * 100)}% of the images')
             self.xca_images = random.sample(self.xca_images, int(len(self.xca_images) * DEBUG_SIZE))  # random.seed is set in pl.seed_everything
 
-        log(f'Reader constructed {len(self.xca_images)} XCA images from the {self.dataset_type} dataset.')
+        log(f'Reader constructed {len(self.xca_images)} XCA images ({DEFAULT_HEIGHT}x{DEFAULT_WIDTH})'
+            f' from the {self.dataset_type} dataset.')
 
     def _which_dataset(self):
         self.dataset_type = 'DANILOV' if 'DANILOV' in str(self.dataset_dir) else 'CADICA'
