@@ -78,7 +78,7 @@ warnings.filterwarnings("ignore", message=r".*Checkpoint directory .* exists and
 warnings.filterwarnings("ignore", message=r".*`training_step` returned `None`.*", category=UserWarning)
 warnings.filterwarnings("ignore", message=r".*The epoch parameter in `scheduler.step\(\)` was not necessary.*", category=UserWarning)
 warnings.filterwarnings("ignore", message=r"Detected call of `lr_scheduler.step\(\)` before `optimizer.step\(\)`", category=UserWarning)
-
+warnings.filterwarnings("ignore", message=r".*A new version of Albumentations is available:.*", category=UserWarning)
 
 
 def setup_reproducibility(seed, deterministic):
@@ -527,6 +527,10 @@ if __name__ == "__main__":
     try:
         experiment = Experiment(config=config)
         experiment.run()
+
+    except KeyboardInterrupt:  # the callback handles graceful shutdown, exit safely here.
+        sys.exit(0)
+
     except Exception as e:
         log(f"Experiment failed: {e}")
         traceback.print_exc()

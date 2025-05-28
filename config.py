@@ -5,7 +5,7 @@ from pathlib import Path
 from util import get_optimal_workers
 
 # ------------ RANDOM SEED -------------- #
-SEED = 5
+SEED = 55
 
 # --------------- PATHS ----------------- #
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -17,11 +17,21 @@ DANILOV_DATASET_PATH = DANILOV_DATASET_DIR / "dataset"
 LOGS_DIR = PROJECT_ROOT / "logs"
 
 # ------------- CONTROLS --------------- #
+DEBUG = False
+DEBUG_SIZE = 0.010  # keep % (DEBUG_SIZE * 100) of data
 
-TEST_MODEL_ON_KEYBOARD_INTERRUPT = True
-CADICA_NEGATIVE_ONLY_ON_BOTH = True
 
-# -- !Important
+CADICA_NEGATIVE_ONLY_ON_BOTH = True  # when loading both datasets, this will load only the negative frames from CADICA
+
+# CALLBACK CONTROLS
+TEST_MODEL_ON_KEYBOARD_INTERRUPT = False
+
+# if in HPC, the command below will stop training and immediately test the model on available checkpoints:
+# echo "TEST" | nc -v localhost 3131
+REMOTE_TEST_PORT = 3131
+REMOTE_TEST_COMMAND = 'TEST\n'
+
+
 #  T_CLIP is used to set the length of a video sequence to T_CLIP frames, this is applied universally
 #  if a video has > T_CLIP frames, T_CLIP of them used. If a video has < T_CLIP, then the video is
 #  padded till it reaches T_CLIP frames
@@ -35,23 +45,22 @@ assert np.isclose(TRAIN_SIZE + VAL_SIZE + TEST_SIZE, 1), 'Train, Validation and 
 CLASSES = ['__background__', 'stenosis']  # binary task 1: stenosis, 0: background, one foreground class
 NUM_CLASSES = len(CLASSES)
 POSITIVE_CLASS_ID = 1
+NUM_WORKERS = 8
 
+
+# -------------- DATA MANIPULATION ---------- #
 APPLY_ADAPTIVE_CONTRAST = True
 USE_STD_DEV_CHECK_FOR_CLAHE = True # if False, contrast will be applied to every image
 ADAPTIVE_CONTRAST_LOW_STD_THRESH = 25.0  # if std < thresh, contrast is applied
 CLAHE_CLIP_LIMIT = 5.0
 CLAHE_TILE_GRID_SIZE = (8, 8)
 
-# May 21 update: sub-segmenting videos
+
 MIN_SUBSEGMENT_LENGTH = 4 #  frames
 IOU_THRESH_SUBSEGMENT = 1e-6  # basically videos next to each other
 
 
-# ------------ RUN-SPECIFIC CONTROLS --------------#
-DEBUG = False
-DEBUG_SIZE = 0.010  # keep % (DEBUG_SIZE * 100) of data
 
-NUM_WORKERS = get_optimal_workers() if not DEBUG else 4
 
 
 # -------------- MODEL-SPECIFIC CONTROLS ---------- #
@@ -72,12 +81,12 @@ ANCHOR_SIZES_P345 = ((8, 11, 16), (22, 32, 45), (60, 80, 100))  # for P3, P4 and
 ANCHOR_SIZES_P2345 = ((4, 5.5, 8), (11, 16, 22), (32, 45, 64), (90, 128, 180))  # add P2 level as well
 
 # ANCHOR SIZES FOR 1024x1024 IMAGES
-# ANCHOR_SIZES_P345 = ((24, 32, 48, 64), (80, 96, 128), (160, 192, 224))
+# ANCHOR_SIZES_P345 = ((24, 32, 48), (80, 96, 128), (160, 192, 224))
 # ANCHOR_SIZES_P2345 = ((16, 22, 32), (48, 64, 80), (96, 128, 160), (192, 224, 256))
 
 
-DEFAULT_BACKBONE_VARIANT = 'b0'   # can be either 'b0' or 'v2_s'
-INCLUDE_P2_FPN = False
+DEFAULT_BACKBONE_VARIANT = 'v2_s'   # can be either 'b0' or 'v2_s'
+INCLUDE_P2_FPN = True
 FPN_OUT_CHANNELS = 256
 
 DEFAULT_ANCHOR_SIZES = ANCHOR_SIZES_P2345 if INCLUDE_P2_FPN else ANCHOR_SIZES_P345

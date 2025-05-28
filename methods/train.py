@@ -18,6 +18,7 @@ from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 # Local imports
 from util import log
 from config import LOGS_DIR, TEST_MODEL_ON_KEYBOARD_INTERRUPT, DEBUG
+from methods.callbacks import TestOnKeyboardInterruptCallback, RemoteTestTriggerCallback
 
 
 def train_model(
@@ -109,6 +110,8 @@ def train_model(
         check_finite=True,
     )
 
+    test_on_interrupt_callback = TestOnKeyboardInterruptCallback()
+    test_on_remote_trigger = RemoteTestTriggerCallback()
 
     profiler = None
     if profiler_enabled:
@@ -133,7 +136,12 @@ def train_model(
     trainer_kwargs = {
         'max_epochs': max_epochs,
         'gradient_clip_val': gradient_clip_val,
-        'callbacks': [checkpoint_callback_val, early_stop_callback, ],
+        'callbacks':
+            [checkpoint_callback_val,
+             early_stop_callback,
+             test_on_interrupt_callback,
+             test_on_remote_trigger,
+             ],
         'logger': logger,
         'log_every_n_steps': 10,
         'deterministic': deterministic,
@@ -175,18 +183,11 @@ def train_model(
         trainer.test(lightning_module, datamodule=data_module, ckpt_path=testing_ckpt_path)
         results_dict["tested_checkpoint_path"] = testing_ckpt_path
     else:
-
-        try:
-            log(f'Starting training. Resuming from checkpoint: {True if resume_from_ckpt_path else False}')
-            trainer.fit(lightning_module, data_module, ckpt_path=resume_from_ckpt_path)
-        except KeyboardInterrupt:
-            if TEST_MODEL_ON_KEYBOARD_INTERRUPT:
-                log(f'Keyboard interrupt received. Testing model (best).')
-                trainer.test(lightning_module, datamodule=checkpoint_callback.best_model_path)
-            else:
-                sys.exit(1)
-
         ckpt_to_test = checkpoint_callback.best_model_path
+
+        log(f'Starting training. Resuming from checkpoint: {True if resume_from_ckpt_path else False}')
+        trainer.fit(lightning_module, data_module, ckpt_path=resume_from_ckpt_path)
+
         if not ckpt_to_test:
             log("No best model checkpoint found from this training run. Attempting to test 'last' checkpoint.")
             ckpt_to_test = 'last'
@@ -260,3 +261,6 @@ def determine_device_config(
         log(f"Warning: Some indices invalid. Requested {indices}; using valid subset: {valid}.")
 
     return "gpu", valid, len(valid)
+
+
+
