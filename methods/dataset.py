@@ -97,17 +97,16 @@ class XCADataset(Dataset):
             )
             self.augment_transform = A.ReplayCompose([
                 # geometric
-                A.HorizontalFlip(p=0.4),
-                A.VerticalFlip(p=0.5),
-                A.Rotate(limit=20, p=0.3),
+                A.HorizontalFlip(p=0.5),
+                A.Rotate(limit=10, p=0.3),
                 A.Transpose(p=0.5),
 
                 # pixel-level
                 A.RandomBrightnessContrast(brightness_limit=0.15, contrast_limit=0.15, p=0.75),
-                A.RandomGamma(gamma_limit=(80, 120), p=0.5),
+                # A.RandomGamma(gamma_limit=(80, 120), p=0.5),
                 A.Sharpen(alpha=(0.2, 0.5), lightness=(0.5, 1.0), p=0.3),
-                A.ImageCompression(quality_range=(80, 99), p=0.5),
-                A.MultiplicativeNoise(multiplier=(0.5, 1.5), elementwise=True, per_channel=True, p=0.3),
+                # A.ImageCompression(quality_range=(80, 99), p=0.5),
+                # A.MultiplicativeNoise(multiplier=(0.5, 1.5), elementwise=True, per_channel=True, p=0.3),
 
                 A.OneOf([
                     A.GaussianBlur(blur_limit=(3, 5), p=0.5),
