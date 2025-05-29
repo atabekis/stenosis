@@ -48,7 +48,7 @@ BASE_CONFIG_SINGLE_GPU = {
     'gradient_clip_val': 1.0,
     'warmup_steps': 100,
     'use_scheduler': True,
-    'patience': 25,
+    'patience': 15,
     'normalize_params': DEFAULT_NORMALIZE_PARAMS,
     'precision': '16-mixed',
     'repeat_channels': True,
@@ -335,6 +335,7 @@ class Experiment:
         hparams_to_log = {
             'model_name': self.model.__class__.__name__,
             'model_stage': cfg['model_stage'],
+            'backbone_variant': cfg.get('backbone_variant'), 'include_p2': cfg.get('include_p2_fpn'),
             'max_epochs': cfg['max_epochs'],
             'target_eff_batch_size': cfg['effective_batch_size'],
             'achieved_eff_batch_size': cfg['effective_batch_size_achieved'],
@@ -349,6 +350,7 @@ class Experiment:
             't_clip': cfg.get('t_clip', T_CLIP),
             'seed': cfg.get('seed'),
             'dataset_dir': os.path.basename(str(cfg.get('dataset_dir'))),
+            'debug': cfg['debug'],
         }
 
         if cfg.get('resume_from_ckpt'):
@@ -485,7 +487,7 @@ if __name__ == "__main__":
     parser.add_argument("--num_workers", type=int, default=None)
     parser.add_argument("--strategy", type=str, choices=["ddp","ddp_spawn","deepspeed","fsdp","none"], default=None)
     parser.add_argument("--precision", type=str, choices=["16-mixed","bf16-mixed","32-true","64-true"], default=None)
-    parser.add_argument("--patience", type=int, default=25)
+    parser.add_argument("--patience", type=int, default=15)
     parser.add_argument("--warmup_steps", type=int, default=None)
     parser.add_argument("--weight_decay", type=float, default=None)
     parser.add_argument("--use_scheduler", action=argparse.BooleanOptionalAction, default=True)
