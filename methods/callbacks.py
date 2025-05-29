@@ -2,9 +2,9 @@
 
 # Python imports
 import sys
-import time
-import socketserver
+import socket
 import threading
+import socketserver
 
 import pytorch_lightning as pl
 
@@ -79,7 +79,14 @@ class RemoteTestTriggerCallback(pl.Callback):
         if not getattr(trainer, 'is_global_zero', True): # open socket only on rank:0 process
             return
 
-        log(f'Listening on port {self.port} for "{self.command}"')
+        hostname = socket.gethostname()
+        try:
+            ip_addr = socket.gethostbyname(hostname)
+        except socket.error:
+            ip_addr = 'unresolved'
+
+        log(f'Compute node hostname: {hostname}, IP address: {ip_addr}. Listening on port {self.port} for "{self.command}"')
+
         self._trigger.clear()
         self._server = socketserver.ThreadingTCPServer(  # have to ssh into local
             ('0.0.0.0', self.port),
