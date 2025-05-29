@@ -62,3 +62,30 @@ def get_optimal_workers():
 def to_numpy(*tensors):
     """this method is used to convert tensors back into numpy arrays"""
     return [tensor.cpu().numpy() if isinstance(tensor, torch.Tensor) else tensor for tensor in tensors]
+
+
+def has_positive_gt(sample_targets, positive_class_id: int, model_stage: int) -> bool:
+    """
+    Return True if sample_targets contains a label equal to positive_class_id.
+    """
+    # stage 1: single dict of labels
+    if model_stage == 1:
+        labels = sample_targets.get("labels", None)
+        if (
+            isinstance(labels, torch.Tensor)
+            and labels.numel() > 0
+            and (labels == positive_class_id).any()
+        ):
+            return True
+        return False
+
+    # stage 2/3: sequence of frame‐dicts
+    for frame_dict in sample_targets or ():
+        labels = frame_dict.get("labels", None)
+        if (
+            isinstance(labels, torch.Tensor)
+            and labels.numel() > 0
+            and (labels == positive_class_id).any()
+        ):
+            return True
+    return False
