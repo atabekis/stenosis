@@ -2,7 +2,7 @@
 import numpy as np
 from pathlib import Path
 
-from util import get_optimal_workers
+from util import get_anchor_config
 
 # ------------ RANDOM SEED -------------- #
 SEED = 55
@@ -17,14 +17,14 @@ DANILOV_DATASET_PATH = DANILOV_DATASET_DIR / "dataset"
 LOGS_DIR = PROJECT_ROOT / "logs"
 
 # ------------- CONTROLS --------------- #
-DEBUG = False
-DEBUG_SIZE = 0.010  # keep % (DEBUG_SIZE * 100) of data
+DEBUG = True
+DEBUG_SIZE = 0.25  # keep % (DEBUG_SIZE * 100) of data
 
 
 CADICA_NEGATIVE_ONLY_ON_BOTH = True  # when loading both datasets, this will load only the negative frames from CADICA
 
 # CALLBACK CONTROLS
-TEST_MODEL_ON_KEYBOARD_INTERRUPT = False
+TEST_MODEL_ON_KEYBOARD_INTERRUPT = True
 
 # if in HPC, the command below will stop training and immediately test the model on available checkpoints:
 # echo "TEST" | nc -v localhost 3131
@@ -49,6 +49,9 @@ NUM_WORKERS = 8
 
 
 # -------------- DATA MANIPULATION ---------- #
+DEFAULT_WIDTH, DEFAULT_HEIGHT = 512, 512  # pixels
+
+
 APPLY_ADAPTIVE_CONTRAST = True
 USE_STD_DEV_CHECK_FOR_CLAHE = True # if False, contrast will be applied to every image
 ADAPTIVE_CONTRAST_LOW_STD_THRESH = 25.0  # if std < thresh, contrast is applied
@@ -57,7 +60,7 @@ CLAHE_TILE_GRID_SIZE = (8, 8)
 
 
 MIN_SUBSEGMENT_LENGTH = 4 #  frames
-IOU_THRESH_SUBSEGMENT = 1e-6  # basically videos next to each other
+IOU_THRESH_SUBSEGMENT = 1e-6  # basically bboxes next to each other
 
 
 # -------------- MODEL-SPECIFIC CONTROLS ---------- #
@@ -68,23 +71,16 @@ DETECTIONS_PER_IMG_AFTER_NMS = 20
 
 
 # DEFAULTS
-DEFAULT_WIDTH, DEFAULT_HEIGHT = 512, 512  # pixels
-
-# ANCHOR SIZES FOR 512x512 IMAGES
-ANCHOR_SIZES_P345 = ((16, 26, 38), (48, 62, 80), (96, 112, 136))  # for P3, P4 and P5 levels of the PFN (include_p2_pfn = False)
-ANCHOR_SIZES_P2345 = ((10, 14, 18), (24, 32, 42), (56, 72, 88), (104, 128, 150))  # add P2 level as well
-
-# ANCHOR SIZES FOR 1024x1024 IMAGES
-# ANCHOR_SIZES_P345 = ((24, 32, 48), (80, 96, 128), (160, 192, 224))
-# ANCHOR_SIZES_P2345 = ((16, 22, 32), (48, 64, 80), (96, 128, 160), (192, 224, 256))
-
-
 DEFAULT_BACKBONE_VARIANT = 'b0'   # can be 'b0', 'v2_s', 'resnet18', 'resnet34'
 INCLUDE_P2_FPN = True
 FPN_OUT_CHANNELS = 256
 
-DEFAULT_ANCHOR_SIZES = ANCHOR_SIZES_P2345 if INCLUDE_P2_FPN else ANCHOR_SIZES_P345
-DEFAULT_ANCHOR_ASPECT_RATIOS = ((0.7, 1.0, 1.4),) * len(DEFAULT_ANCHOR_SIZES)
+DEFAULT_ANCHOR_SIZES, DEFAULT_ANCHOR_ASPECT_RATIOS = get_anchor_config(  # get auto-scaled anchor sizes based on:
+    current_img_width=DEFAULT_WIDTH,  # image sizes
+    current_img_height=DEFAULT_HEIGHT,
+    include_p2_fpn=INCLUDE_P2_FPN, # whether to include extra P2 FPN layer
+)
+
 
 
 INFERENCE_SCORE_THRESH = 0.1

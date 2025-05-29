@@ -2,6 +2,7 @@
 
 # Python imports
 import os
+import math
 import torch
 import inspect
 import datetime
@@ -53,15 +54,39 @@ def log(*args, verbose=True, show_func=True, omit_funcs=None, **kwargs):
     print("".join(parts), f"\"{message}\"", **kwargs)
 
 
-def get_optimal_workers():
-    cpu_count = os.cpu_count() or mp.cpu_count()
-    # return max(1, cpu_count - 2)
-    return 8
+
+_BASELINE_SHAPE= (512, 512)
+_BASELINE_ANCHORS = {
+    False: ((16, 26, 38), (48, 62, 80), (96, 112, 136)),  # P3 P4 P5
+    True: ((10, 14, 18), (24, 32, 42), (56, 72, 88), (104, 128, 150)), #P2 P3 P4 P5
+}
+_ASPECT_RATIOS = (0.7, 1.0, 1.4)
 
 
-def to_numpy(*tensors):
-    """this method is used to convert tensors back into numpy arrays"""
-    return [tensor.cpu().numpy() if isinstance(tensor, torch.Tensor) else tensor for tensor in tensors]
+def get_anchor_config(current_img_height: int, current_img_width: int, include_p2_fpn: bool):
+    """
+    Compute scaled anchor sizes and aspect ratios for a given image size.
+
+    Scaling is done by the geometric mean of height and width factors relative
+    to the baseline 512×512 image. Aspect ratios remain fixed per level.
+
+    """
+    base_h, base_w = _BASELINE_SHAPE
+
+    # geometric-mean scale factor
+    scale = math.sqrt((current_img_height / base_h) * (current_img_width / base_w))
+
+    baseline_levels = _BASELINE_ANCHORS[include_p2_fpn]
+
+    # scale and clamp to at least 1px
+    anchor_sizes = tuple(
+        tuple(max(1, int(round(size * scale))) for size in level)
+        for level in baseline_levels
+    )
+    # repeat the aspect-ratio set for each level
+    aspect_ratios = (_ASPECT_RATIOS,) * len(anchor_sizes)
+
+    return anchor_sizes, aspect_ratios
 
 
 def has_positive_gt(sample_targets, positive_class_id: int, model_stage: int) -> bool:
