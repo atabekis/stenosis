@@ -92,8 +92,8 @@ class XCADataset(Dataset):
             bbox_params = A.BboxParams(
                 format='pascal_voc',
                 label_fields=['category_ids'],
-                min_visibility=0.20,  # based on my observations, this should not happen (at least in CADICA)
-                min_area=6
+                min_visibility=0.40,  # based on my observations, this should not happen (at least in CADICA)
+                min_area=36
             )
             self.augment_transform = A.ReplayCompose([
                 # geometric
@@ -115,8 +115,8 @@ class XCADataset(Dataset):
                 ], p=0.7),
 
                 # A.GaussNoise(std_range=(0.1, 0.3)),
-                A.CoarseDropout(num_holes_range=(1 ,5),
-                                hole_height_range=(0, int(DEFAULT_HEIGHT * 0.08)), hole_width_range=(0, int(DEFAULT_WIDTH * 0.08)),
+                A.CoarseDropout(num_holes_range=(1 ,4),
+                                hole_height_range=(0, int(DEFAULT_HEIGHT * 0.03)), hole_width_range=(0, int(DEFAULT_WIDTH * 0.04)),
                                 fill=0,
                                 p=0.3),
 

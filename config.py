@@ -60,42 +60,37 @@ MIN_SUBSEGMENT_LENGTH = 4 #  frames
 IOU_THRESH_SUBSEGMENT = 1e-6  # basically videos next to each other
 
 
-
-
-
 # -------------- MODEL-SPECIFIC CONTROLS ---------- #
 FOCAL_LOSS_ALPHA = 0.25  # positive anchors weight=alpha, negative anchors weight = 1-alpha
 FOCAL_LOSS_GAMMA = 2.0
 
 DETECTIONS_PER_IMG_AFTER_NMS = 20
 
-GIOU_LOSS_COEF = 2.0
-L1_LOSS_COEF = 5.0
-CLS_LOSS_COEF = 2.0
 
 # DEFAULTS
 DEFAULT_WIDTH, DEFAULT_HEIGHT = 512, 512  # pixels
 
 # ANCHOR SIZES FOR 512x512 IMAGES
-ANCHOR_SIZES_P345 = ((8, 11, 16), (22, 32, 45), (60, 80, 100))  # for P3, P4 and P5 levels of the PFN (include_p2_pfn = False)
-ANCHOR_SIZES_P2345 = ((4, 5.5, 8), (11, 16, 22), (32, 45, 64), (90, 128, 180))  # add P2 level as well
+ANCHOR_SIZES_P345 = ((16, 26, 38), (48, 62, 80), (96, 112, 136))  # for P3, P4 and P5 levels of the PFN (include_p2_pfn = False)
+ANCHOR_SIZES_P2345 = ((10, 14, 18), (24, 32, 42), (56, 72, 88), (104, 128, 150))  # add P2 level as well
 
 # ANCHOR SIZES FOR 1024x1024 IMAGES
 # ANCHOR_SIZES_P345 = ((24, 32, 48), (80, 96, 128), (160, 192, 224))
 # ANCHOR_SIZES_P2345 = ((16, 22, 32), (48, 64, 80), (96, 128, 160), (192, 224, 256))
 
 
-DEFAULT_BACKBONE_VARIANT = 'v2_s'   # can be either 'b0' or 'v2_s'
+DEFAULT_BACKBONE_VARIANT = 'b0'   # can be 'b0', 'v2_s', 'resnet18', 'resnet34'
 INCLUDE_P2_FPN = True
 FPN_OUT_CHANNELS = 256
 
 DEFAULT_ANCHOR_SIZES = ANCHOR_SIZES_P2345 if INCLUDE_P2_FPN else ANCHOR_SIZES_P345
-DEFAULT_ANCHOR_ASPECT_RATIOS = ((0.5, 1.0, 2.0),) * len(DEFAULT_ANCHOR_SIZES)
+DEFAULT_ANCHOR_ASPECT_RATIOS = ((0.7, 1.0, 1.4),) * len(DEFAULT_ANCHOR_SIZES)
 
 
 INFERENCE_SCORE_THRESH = 0.1
 INFERENCE_NMS_THRESH = 0.4
 PRF1_THRESH = 0.1
+IOU_THRESH_METRIC = 0.5
 
 # -------- SHARED BASE CONFIG -------- #
 

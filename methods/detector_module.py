@@ -23,15 +23,15 @@ from pytorch_lightning.loggers import TensorBoardLogger
 # Local imports
 from models.common.sca_utils import apply_sequence_consistency_alignment
 from models.common.params_helper import get_optimizer_param_groups
-from util import log
+from util import log, has_positive_gt
+
 from config import (
     FOCAL_LOSS_ALPHA,
     FOCAL_LOSS_GAMMA,
-    GIOU_LOSS_COEF,
-    L1_LOSS_COEF,
-    CLS_LOSS_COEF,
+
     POSITIVE_CLASS_ID,
     PRF1_THRESH,
+    IOU_THRESH_METRIC,
     CLASSES,
 
     SCA_CONFIG,
@@ -68,8 +68,6 @@ class DetectionLightningModule(pl.LightningModule):
             batch_size: int = 32,
             accumulate_grad_batches: int = 1,
             # specific params for stage 3
-            # stem_learning_rate: float = 1e-5,  # differential LR
-            # loss params (can be overridden by model-specific losses)
 
             optimizer_config: Optional[dict] = OPTIMIZER_CONFIG,
             use_scheduler: bool = True,
@@ -77,9 +75,6 @@ class DetectionLightningModule(pl.LightningModule):
 
             focal_alpha: float = FOCAL_LOSS_ALPHA,
             focal_gamma: float = FOCAL_LOSS_GAMMA,
-            smooth_l1_beta: float = 1.0 / 9.0,  # common default for smooth L1
-            giou_loss_coef: float = GIOU_LOSS_COEF,
-            cls_loss_coef: float = CLS_LOSS_COEF,
             # as extension for another future project :)
             positive_class_id: int = POSITIVE_CLASS_ID,
 
@@ -102,12 +97,10 @@ class DetectionLightningModule(pl.LightningModule):
         self.batch_size = batch_size
         self.accumulate_grad_batches = accumulate_grad_batches
         self.use_scheduler = use_scheduler
-        # self.stem_learning_rate = stem_learning_rate
+
         self.focal_alpha = focal_alpha
         self.focal_gamma = focal_gamma
-        self.smooth_l1_beta = smooth_l1_beta
-        self.giou_loss_coef = giou_loss_coef
-        self.cls_loss_coef = cls_loss_coef
+
         self.positive_class_id = positive_class_id
         self.hparam_primary_metric = hparam_primary_metric
         self.use_sca = use_sca
@@ -361,6 +354,11 @@ class DetectionLightningModule(pl.LightningModule):
         if should_log and stored < limit:
             for i in range(int(min((limit - stored), batch_size))):
                 img_store.append(images[i].cpu().detach())
+
+                # # it's better to log the images where GT is present to see performance
+                # print(targets[i])
+                # if not has_positive_gt(targets[i], self.positive_class_id, self.model_stage):  # external method to check
+                #     continue
 
                 if self.model_stage == 1:
                     pred_s_store.append({k: v.cpu().detach() for k, v in preds[i].items()})
@@ -754,7 +752,7 @@ class DetectionLightningModule(pl.LightningModule):
         }
 
 
-    def compute_ap_for_area(self, predictions, targets, max_area=None, min_area=None, iou_threshold=0.5):
+    def compute_ap_for_area(self, predictions, targets, max_area=None, min_area=None, iou_threshold=IOU_THRESH_METRIC):
         """
         Computes average precision (AP) for the positive class (stenosis, label=1) within a specific area range.
         """
@@ -853,7 +851,7 @@ class DetectionLightningModule(pl.LightningModule):
         return ap.item()
 
 
-    def compute_prf1(self, predictions, targets, iou_threshold=0.5, score_threshold=PRF1_THRESH):
+    def compute_prf1(self, predictions, targets, iou_threshold=IOU_THRESH_METRIC, score_threshold=PRF1_THRESH):
         """
         Computes Precision, Recall, and F1 score for the positive class (stenosis, label=1) at given IoU and score thresholds.
         """
@@ -1077,5 +1075,7 @@ class DetectionLightningModule(pl.LightningModule):
         log_message += "\n----------------------------------------------------"
 
         log(log_message, verbose=self.slurm, flush=True)
+
+
 
 
