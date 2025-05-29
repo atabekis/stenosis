@@ -7,7 +7,7 @@ import torchvision.models as models
 from torchvision.ops import FeaturePyramidNetwork
 from torchvision.models._utils import IntermediateLayerGetter
 
-class EfficientNetFPNBackbone(nn.Module):
+class FPNBackbone(nn.Module):
     """
     Creates an EfficientNet backbone, with a Feature Pyramid Network (FPN).
 
@@ -29,12 +29,13 @@ class EfficientNetFPNBackbone(nn.Module):
         self.variant = variant.lower()
         self.include_p2 = include_p2
 
-        # effnet.features[0] is the stem.
-        # effnet.features[i] for i > 0 is the output of the (i-1)-th block configuration.
+        base_model = None
 
         if self.variant == "b0": # EfficientNet-B0
             weights = models.EfficientNet_B0_Weights.IMAGENET1K_V1 if pretrained else None
             effnet = models.efficientnet_b0(weights=weights)
+            base_model = effnet.features
+
             # features[2]: out 24ch (effnet stride 4) -> P2
             # features[3]: out 40ch (effnet stride 8) -> P3
             # features[5]: out 112ch (effnet stride 16, deeper) -> P4
@@ -50,6 +51,7 @@ class EfficientNetFPNBackbone(nn.Module):
         elif self.variant == "v2_s":  # EfficientNet V2 Small
             weights = models.EfficientNet_V2_S_Weights.IMAGENET1K_V1 if pretrained else None
             effnet = models.efficientnet_v2_s(weights=weights)
+            base_model = effnet.features
             # features[2]: out 48ch (effnet stride 4, from bneck_conf[1]) -> P2
             # features[3]: out 64ch (effnet stride 8, from bneck_conf[2]) -> P3
             # features[5]: out 160ch (effnet stride 16, from bneck_conf[4], deeper) -> P4
@@ -61,11 +63,37 @@ class EfficientNetFPNBackbone(nn.Module):
             else:
                 return_layers_map = {'3': '0', '5': '1', '6': '2'} # P3, P4, P5
                 in_channels_list_map = [64, 160, 256]
+
+        elif self.variant == "resnet18":  # may 29 update, experimenting with resnet vairants for overfitting
+            weights = models.ResNet18_Weights.IMAGENET1K_V1 if pretrained else None
+            resnet = models.resnet18(weights=weights)
+            base_model = resnet
+
+            if self.include_p2: # P2, P3, P4, P5
+                return_layers_map = {'layer1': '0', 'layer2': '1', 'layer3': '2', 'layer4': '3'}
+                in_channels_list_map = [64, 128, 256, 512]
+            else: # P3, P4, P5
+                return_layers_map = {'layer2': '0', 'layer3': '1', 'layer4': '2'}
+                in_channels_list_map = [128, 256, 512]
+
+
+        elif self.variant == "resnet34":
+            weights = models.ResNet34_Weights.IMAGENET1K_V1 if pretrained else None
+            resnet = models.resnet34(weights=weights)
+            base_model = resnet
+
+            if self.include_p2:  # P2, P3, P4, P5
+                return_layers_map = {'layer1': '0', 'layer2': '1', 'layer3': '2', 'layer4': '3'}
+                in_channels_list_map = [64, 128, 256, 512]
+            else:  # P3, P4, P5
+                return_layers_map = {'layer2': '0', 'layer3': '1', 'layer4': '2'}
+                in_channels_list_map = [128, 256, 512]
+
         else:
             raise ValueError(f"Unsupported EfficientNet variant: {variant}")
 
         # backbone feature extractor
-        self.body = IntermediateLayerGetter(effnet.features, return_layers=return_layers_map)
+        self.body = IntermediateLayerGetter(base_model, return_layers=return_layers_map)
 
         # fpn
         self.fpn = FeaturePyramidNetwork(

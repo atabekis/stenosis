@@ -502,6 +502,7 @@ if __name__ == "__main__":
     parser.add_argument("--deterministic", action=argparse.BooleanOptionalAction, default=False)
 
     # Model specific: general
+    parser.add_argument("--backbone_variant", default=None, choices=['b0', 'v2_s', 'resnet18', 'resnet34'])
 
     # Model-specific: Stages 2, 3
     parser.add_argument('--use_sca', action=argparse.BooleanOptionalAction, default=False)

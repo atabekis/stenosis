@@ -11,7 +11,7 @@ from typing import Union, Optional
 
 # Backbone model
 from models.stage1.backbone import EfficientNetFPNBackbone
-from models.stage1.backbone_v2 import EfficientNetFPNBackbone as BackboneV2
+from models.stage1.backbone_v2 import FPNBackbone as BackboneV2
 from models.common.retinanet_utils import GNDropoutRetinaNetClassificationHead
 
 # Local imports

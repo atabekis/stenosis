@@ -72,7 +72,7 @@ def get_optimizer_param_groups(model, config):
 
         # FPN parameters
         elif name.startswith(
-                backbone_base_prefix + "fpn."):  # model.backbone.fpn (EfficientNetFPNBackbone, THANOS)
+                backbone_base_prefix + "fpn."):  # model.backbone.fpn (FPNBackbone, THANOS)
             param_groups["fpn"]["params"].append(param)
             assigned_to_group = True
         # FPN as a direct attribute (TSMRetinaNet)
