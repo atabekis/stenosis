@@ -30,8 +30,9 @@ from config import (
     DEFAULT_HEIGHT, DEFAULT_WIDTH,
     TRAIN_SIZE, VAL_SIZE, TEST_SIZE,
     NUM_CLASSES, POSITIVE_CLASS_ID, FOCAL_LOSS_ALPHA, FOCAL_LOSS_GAMMA, T_CLIP,
-    STAGE1_RETINANET_DEFAULT_CONFIG, STAGE2_TSM_RETINANET_DEFAULT_CONFIG, STAGE3_THANOS_DEFAULT_CONFIG, OPTIMIZER_CONFIG,
-    TEST_MODEL_ON_KEYBOARD_INTERRUPT,
+    STAGE1_RETINANET_DEFAULT_CONFIG, STAGE2_TSM_RETINANET_DEFAULT_CONFIG, STAGE3_THANOS_DEFAULT_CONFIG,
+    OPTIMIZER_CONFIG,
+    TEST_MODEL_ON_KEYBOARD_INTERRUPT, DANILOV_DATASET_DIR,
 )
 
 
@@ -47,7 +48,8 @@ BASE_CONFIG_SINGLE_GPU = {
     'weight_decay': OPTIMIZER_CONFIG['weight_decay'],
     'gradient_clip_val': 1.0,
     'warmup_steps': 100,
-    'use_scheduler': True,
+    'scheduler': 'cosine',
+    'scheduler_patience_config': 10, # patience for mode 'reduce', used as patience in ReduceLROnPlateau
     'patience': 15,
     'normalize_params': DEFAULT_NORMALIZE_PARAMS,
     'precision': '16-mixed',
@@ -272,7 +274,18 @@ class Experiment:
         """
         Initialize the Reader, load images or videos depending on stage, and build the DataModule.
         """
+        dataset_map = {
+            'danilov': DANILOV_DATASET_DIR,
+            'cadica': CADICA_DATASET_DIR,
+            'both': 'both'  # for consistency
+        }
+
         rc = self.run_config
+
+        if rc['dataset_dir'].lower() in dataset_map.keys():
+            rc['dataset_dir'] = dataset_map[rc['dataset_dir']]
+
+
         reader = Reader(
             dataset_dir=rc['dataset_dir'],
             debug=rc['debug'],
@@ -344,7 +357,7 @@ class Experiment:
             'learning_rate': cfg['learning_rate'],
             'weight_decay': cfg['weight_decay'],
             'warmup_steps': cfg['warmup_steps'],
-            'use_scheduler': cfg.get('use_scheduler', True),
+            'scheduler': cfg.get('scheduler', 'cosine'),
             'use_augmentation': cfg['use_augmentation'],
             'precision': cfg.get('precision', '32-true'),
             't_clip': cfg.get('t_clip', T_CLIP),
@@ -393,7 +406,7 @@ class Experiment:
             batch_size=lightning_module_batch_size_arg,
             accumulate_grad_batches=cfg['accumulate_grad_batches'],
             # stem_learning_rate=cfg.get('stem_learning_rate', 1e-5),
-            use_scheduler=cfg.get('use_scheduler', True),
+            scheduler_type=cfg.get('scheduler', 'cosine'),
             use_sca=cfg.get('use_sca', False),
             focal_alpha=cfg.get('focal_loss_alpha'),
             focal_gamma=cfg.get('focal_loss_gamma'),
@@ -414,7 +427,7 @@ class Experiment:
             'effective_batch_size',
             'accumulate_grad_batches',
             'effective_batch_size_achieved',
-            'learning_rate', 'weight_decay', 'warmup_steps', 'use_scheduler',
+            'learning_rate', 'weight_decay', 'warmup_steps', 'scheduler',
             'use_augmentation',
             'normalize_params', 'repeat_channels', 't_clip', 'jitter',
             'gpus_for_trainer', 'num_gpus_for_calc', 'num_workers', 'strategy_for_trainer',
@@ -490,7 +503,7 @@ if __name__ == "__main__":
     parser.add_argument("--patience", type=int, default=15)
     parser.add_argument("--warmup_steps", type=int, default=None)
     parser.add_argument("--weight_decay", type=float, default=None)
-    parser.add_argument("--use_scheduler", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--scheduler", type=str, choices=['off', 'cosine', 'reduce'], default='cosine')
 
 
     parser.add_argument("--subsegment", action=argparse.BooleanOptionalAction, default=False)

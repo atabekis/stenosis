@@ -13,7 +13,7 @@ import torch.optim as optim
 import pytorch_lightning as pl
 from torchvision.ops import box_iou
 from torchmetrics.detection import MeanAveragePrecision
-from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
+from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR, ReduceLROnPlateau
 
 # Image logging in TensorBoard
 from torchvision.utils import draw_bounding_boxes
@@ -35,13 +35,16 @@ from config import (
     CLASSES,
 
     SCA_CONFIG,
-    OPTIMIZER_CONFIG
+    OPTIMIZER_CONFIG,
+
+    DETECTIONS_PER_IMG_AFTER_NMS
 )
 
 # tensorboard logging
 PRED_COLOR = "blue"
 GT_COLOR = "green"
 LOG_SCORE_THRESHOLD = 0.0 # For the TensorBoard logger, boxes with confidence score > will be put on the image
+MAX_PREDS_TO_DRAW = DETECTIONS_PER_IMG_AFTER_NMS
 
 
 class DetectionLightningModule(pl.LightningModule):
@@ -70,7 +73,8 @@ class DetectionLightningModule(pl.LightningModule):
             # specific params for stage 3
 
             optimizer_config: Optional[dict] = OPTIMIZER_CONFIG,
-            use_scheduler: bool = True,
+            scheduler_type: str = 'cosine',
+            scheduler_patience_config: int = 10,
             use_sca: bool = False,
 
             focal_alpha: float = FOCAL_LOSS_ALPHA,
@@ -96,7 +100,10 @@ class DetectionLightningModule(pl.LightningModule):
         self.max_epochs = max_epochs
         self.batch_size = batch_size
         self.accumulate_grad_batches = accumulate_grad_batches
-        self.use_scheduler = use_scheduler
+
+        self.scheduler_type = scheduler_type
+        self.optimizer_config = optimizer_config
+        self.scheduler_patience_config = scheduler_patience_config
 
         self.focal_alpha = focal_alpha
         self.focal_gamma = focal_gamma
@@ -104,7 +111,6 @@ class DetectionLightningModule(pl.LightningModule):
         self.positive_class_id = positive_class_id
         self.hparam_primary_metric = hparam_primary_metric
         self.use_sca = use_sca
-        self.optimizer_config = optimizer_config
 
 
         if model_stage not in [1, 2, 3]:
@@ -698,58 +704,75 @@ class DetectionLightningModule(pl.LightningModule):
             raise ValueError(f"Unsupported optimizer: {opt_cfg['name']}")
 
 
-        if not self.use_scheduler:
-            log("Learning rate scheduler is DISABLED by 'use_scheduler=False'.")
+        if not self.scheduler_type == 'off':
+            log("Learning rate scheduler is DISABLED by 'scheduler_type=off'.")
             return optimizer
 
-        # ---- scheduler calculation -----
-        warmup_steps = self.warmup_steps
-        total_training_steps = 0
+        elif self.scheduler_type == 'cosine':
 
-        try:
-            if self.trainer and self.trainer.datamodule and hasattr(self.trainer, 'estimated_stepping_batches'):
-                total_training_steps = self.trainer.estimated_stepping_batches
-                log(f"Using trainer.estimated_stepping_batches: {total_training_steps}")
-            elif self.trainer and self.trainer.datamodule:
-                gpus = self.trainer.num_devices if self.trainer.num_devices > 0 else 1
-                num_samples = len(self.trainer.datamodule.train_dataloader().dataset)
-                effective_batch_size = self.batch_size * gpus * self.accumulate_grad_batches
-                steps_per_epoch = math.ceil(num_samples / effective_batch_size)
-                total_training_steps = steps_per_epoch * self.max_epochs
-                log(f"Manually estimated scheduler steps: Samples={num_samples}, EffBatch={effective_batch_size}, "
-                    f"Steps/Epoch={steps_per_epoch}, Total={total_training_steps}")
-            else:
-                log(f"Warning: Trainer/datamodule not available during optimizer setup. "
-                    f"Using potentially inaccurate fallback for scheduler steps")
+            # ---- scheduler calculation -----
+            warmup_steps = self.warmup_steps
+            total_training_steps = 0
+
+            try:
+                if self.trainer and self.trainer.datamodule and hasattr(self.trainer, 'estimated_stepping_batches'):
+                    total_training_steps = self.trainer.estimated_stepping_batches
+                    log(f"Using trainer.estimated_stepping_batches: {total_training_steps}")
+                elif self.trainer and self.trainer.datamodule:
+                    gpus = self.trainer.num_devices if self.trainer.num_devices > 0 else 1
+                    num_samples = len(self.trainer.datamodule.train_dataloader().dataset)
+                    effective_batch_size = self.batch_size * gpus * self.accumulate_grad_batches
+                    steps_per_epoch = math.ceil(num_samples / effective_batch_size)
+                    total_training_steps = steps_per_epoch * self.max_epochs
+                    log(f"Manually estimated scheduler steps: Samples={num_samples}, EffBatch={effective_batch_size}, "
+                        f"Steps/Epoch={steps_per_epoch}, Total={total_training_steps}")
+                else:
+                    log(f"Warning: Trainer/datamodule not available during optimizer setup. "
+                        f"Using potentially inaccurate fallback for scheduler steps")
+                    total_training_steps = warmup_steps + 10000
+
+            except Exception as e:
+                log(f'Error calculating scheduler steps, using fallback: {e}')
                 total_training_steps = warmup_steps + 10000
 
-        except Exception as e:
-            log(f'Error calculating scheduler steps, using fallback: {e}')
-            total_training_steps = warmup_steps + 10000
 
+            if total_training_steps <= warmup_steps:
+                log(f"Warning: Total steps ({total_training_steps}) <= warmup steps ({warmup_steps})."
+                    f" Scheduler might not behave as expected. Check max_epochs, dataset size, batch size, accumulation")
+                cosine_steps = 1
+            else:
+                cosine_steps = total_training_steps - warmup_steps
 
-        if total_training_steps <= warmup_steps:
-            log(f"Warning: Total steps ({total_training_steps}) <= warmup steps ({warmup_steps})."
-                f" Scheduler might not behave as expected. Check max_epochs, dataset size, batch size, accumulation")
-            cosine_steps = 1
-        else:
-            cosine_steps = total_training_steps - warmup_steps
+            log(f"Scheduler config: Total Steps={total_training_steps}, Warmup Steps={warmup_steps}, Cosine Steps={cosine_steps}")
 
-        log(f"Scheduler config: Total Steps={total_training_steps}, Warmup Steps={warmup_steps}, Cosine Steps={cosine_steps}")
+            # ----- schedulers -----
+            warmup_scheduler = LinearLR(optimizer, start_factor=1e-6, total_iters=warmup_steps)
+            cosine_scheduler = CosineAnnealingLR(optimizer, T_max=max(1, cosine_steps), eta_min=1e-7)
+            lr_scheduler = SequentialLR(optimizer, schedulers=[warmup_scheduler, cosine_scheduler], milestones=[warmup_steps])
 
-        # ----- schedulers -----
-        warmup_scheduler = LinearLR(optimizer, start_factor=1e-6, total_iters=warmup_steps)
-        cosine_scheduler = CosineAnnealingLR(optimizer, T_max=max(1, cosine_steps), eta_min=1e-7)
-        lr_scheduler = SequentialLR(optimizer, schedulers=[warmup_scheduler, cosine_scheduler], milestones=[warmup_steps])
-
-        return {
-            "optimizer": optimizer,
-            "lr_scheduler": {
-                "scheduler": lr_scheduler,
-                "interval": "step",
-                "frequency": 1
+            return {
+                "optimizer": optimizer,
+                "lr_scheduler": {
+                    "scheduler": lr_scheduler,
+                    "interval": "step",
+                    "frequency": 1
+                }
             }
-        }
+
+        elif self.scheduler_type == "reduce":
+            log(f"Using ReduceLROnPlateau scheduler, monitoring 'val_loss', patience={self.scheduler_patience_config}, factor=0.1.")
+            reduce_lr_scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=self.scheduler_patience_config, verbose=True)
+            return {
+                "optimizer": optimizer,
+                "lr_scheduler": {
+                    "scheduler": reduce_lr_scheduler,
+                    "monitor": "val_loss", # might need to change this to not be hard-coded later
+                    "interval": "epoch",
+                    "frequency": 1,
+                }
+            }
+
+
 
 
     def compute_ap_for_area(self, predictions, targets, max_area=None, min_area=None, iou_threshold=IOU_THRESH_METRIC):
@@ -1019,26 +1042,39 @@ class DetectionLightningModule(pl.LightningModule):
             gt_labels = tgt_frame.get('labels', torch.zeros(0, dtype=torch.int64)).tolist()
             gt_texts = [f"GT:{CLASSES[l]}" for l in gt_labels if 0 <= l < len(CLASSES)]
 
-            # pred boxes/text (single box only)
-            pboxes = pred_frame.get('boxes', torch.zeros((0, 4)))
-            pscores = pred_frame.get('scores', torch.zeros(0))
-            plabels = pred_frame.get('labels', torch.zeros(0, dtype=torch.int64))
-            if pboxes.numel() and pscores[0] >= LOG_SCORE_THRESHOLD:
-                pboxes = pboxes[:1]
-                pl = plabels[0].item()
-                pt = f"{CLASSES[pl]}:{pscores[0].item():.2f}"
-                pred_boxes = pboxes
-                pred_texts = [pt]
-            else:
-                pred_boxes = torch.zeros((0, 4))
-                pred_texts = []
+            # pred boxes/text (multiple boxes)
+            all_pboxes = pred_frame.get('boxes', torch.zeros((0, 4), device=img_dn.device))
+            all_pscores = pred_frame.get('scores', torch.zeros(0, device=img_dn.device))
+            all_plabels = pred_frame.get('labels', torch.zeros(0, dtype=torch.int64, device=img_dn.device))
+
+            # filter by score thresh (only for logging)
+            valid_pred_mask = all_pscores >= LOG_SCORE_THRESHOLD
+            filtered_pboxes = all_pboxes[valid_pred_mask]
+            filtered_pscores = all_pscores[valid_pred_mask]
+            filtered_labels = all_plabels[valid_pred_mask]
+
+            num_preds_to_draw = min(len(filtered_pboxes), MAX_PREDS_TO_DRAW)
+            pboxes_to_draw = torch.zeros((0, 4), device=img_dn.device)
+            pred_texts_to_draw = []
+
+            if num_preds_to_draw > 0:
+                pboxes_to_draw = filtered_pboxes[:num_preds_to_draw]
+                pscores_to_draw = filtered_pscores[:num_preds_to_draw]
+                plabels_to_draw = filtered_labels[:num_preds_to_draw]
+
+                pred_texts_to_draw = [
+                    f"{CLASSES[pl.item()]}:{ps.item():.2f}"
+                    for pl, ps in zip(plabels_to_draw, pscores_to_draw)
+                    if 0 <= pl.item() < len(CLASSES)
+                ]
+
 
             # draw boxes
             canvas = img_dn.clone()
             if gt_boxes.numel():
                 canvas = draw_bounding_boxes(canvas, gt_boxes, labels=gt_texts, colors=GT_COLOR, width=2)
-            if pred_boxes.numel():
-                canvas = draw_bounding_boxes(canvas, pred_boxes, labels=pred_texts, colors=PRED_COLOR, width=2)
+            if pboxes_to_draw.numel():
+                canvas = draw_bounding_boxes(canvas, pboxes_to_draw, labels=pred_texts_to_draw, colors=PRED_COLOR, width=2)
 
             to_log.append(canvas)
 
