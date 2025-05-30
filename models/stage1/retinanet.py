@@ -9,12 +9,11 @@ from torchvision.models.detection.anchor_utils import AnchorGenerator
 # Python import
 from typing import Union, Optional
 
-# Backbone model
-from models.stage1.backbone import EfficientNetFPNBackbone
+# Backbone model & local
 from models.stage1.backbone_v2 import FPNBackbone as BackboneV2
 from models.common.retinanet_utils import GNDropoutRetinaNetClassificationHead
+from models.common.params_helper import get_state_dict_from_ckpt
 
-# Local imports
 from util import log
 
 
@@ -54,6 +53,12 @@ class FPNRetinaNet(nn.Module):
         classification_head_use_groupnorm = config.get("classification_head_use_groupnorm", False)
         classification_head_num_gn_groups = config.get("classification_head_num_gn_groups", 32)
 
+        # Checkpoint loading params
+        load_weights_ckpt_path = config.get("load_weights_from_ckpt", None)
+        ckpt_model_key_prefix = config.get("ckpt_model_key_prefix", 'model.')
+
+        if load_weights_ckpt_path:  # disable imagenet weights if we give a checkpoint
+            pretrained_backbone = False
 
         log("Initializing FPNRetinaNet with parameters:")
         log(f"  Num classes: {num_classes}")
@@ -111,6 +116,24 @@ class FPNRetinaNet(nn.Module):
 
         self.retinanet.head.classification_head.focal_loss_alpha = focal_loss_alpha
         self.retinanet.head.classification_head.focal_loss_gamma = focal_loss_gamma
+
+
+        if load_weights_ckpt_path:
+            log(f'Loading weights from checkpoint: {load_weights_ckpt_path}')
+            model_weights = get_state_dict_from_ckpt(load_weights_ckpt_path, model_key_prefix=ckpt_model_key_prefix)
+
+            if model_weights:
+                missing, unexpected = self.load_state_dict(model_weights, strict=False)
+
+                if missing: log(f"Warning: Missing keys (first 5): {missing[:5]}")
+                if unexpected: log(f"Warning: Unexpected keys (first 5): {unexpected[:5]}")
+
+                log(f"INFO: {"Successfully" if not (missing or unexpected) else "Partially"} loaded weights from checkpoint.")
+
+            else: log(f'Warning: Checkpoint yielded no weights; continuing with existing weights.')
+
+
+
 
     def forward(self,
             images: Union[list[torch.Tensor], torch.Tensor],

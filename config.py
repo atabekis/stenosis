@@ -16,9 +16,11 @@ DANILOV_DATASET_PATH = DANILOV_DATASET_DIR / "dataset"
 
 LOGS_DIR = PROJECT_ROOT / "logs"
 
+BACKBONE_MODEL_WEIGHTS = "logs/FPNRetinaNet/debug/version_4/checkpoints/last.ckpt" # using pretrained model checkpoint
+
 # ------------- CONTROLS --------------- #
-DEBUG = True
-DEBUG_SIZE = 0.25  # keep % (DEBUG_SIZE * 100) of data
+DEBUG = False
+DEBUG_SIZE = 0.05  # keep % (DEBUG_SIZE * 100) of data
 
 
 CADICA_NEGATIVE_ONLY_ON_BOTH = True  # when loading both datasets, this will load only the negative frames from CADICA
@@ -27,7 +29,7 @@ CADICA_NEGATIVE_ONLY_ON_BOTH = True  # when loading both datasets, this will loa
 TEST_MODEL_ON_KEYBOARD_INTERRUPT = True
 
 # if in HPC, the command below will stop training and immediately test the model on available checkpoints:
-# echo "TEST" | nc -v localhost 3131
+# echo "TEST" | nc -v hostname 3131   → hostname printed when training starts, for HPC it's a compute node such as mcs-gpua001
 REMOTE_TEST_PORT = 3131
 REMOTE_TEST_COMMAND = 'TEST\n'
 
@@ -67,7 +69,12 @@ IOU_THRESH_SUBSEGMENT = 1e-6  # basically bboxes next to each other
 FOCAL_LOSS_ALPHA = 0.25  # positive anchors weight=alpha, negative anchors weight = 1-alpha
 FOCAL_LOSS_GAMMA = 2.0
 
-DETECTIONS_PER_IMG_AFTER_NMS = 20
+DETECTIONS_PER_IMG_AFTER_NMS = 3  # give the model some flexibility
+
+INFERENCE_SCORE_THRESH = 0.35  # passed onto score_threshold in RetinaNet
+INFERENCE_NMS_THRESH = 0.4   # passed onto nms_thresh in RetinaNet
+PRF1_THRESH = INFERENCE_SCORE_THRESH  # used in calculating the Precision Recall, F1 scores at a threshold
+IOU_THRESH_METRIC = 0.5  # used in metric calculation, IoU@0.5
 
 
 # DEFAULTS
@@ -81,12 +88,6 @@ DEFAULT_ANCHOR_SIZES, DEFAULT_ANCHOR_ASPECT_RATIOS = get_anchor_config(  # get a
     include_p2_fpn=INCLUDE_P2_FPN, # whether to include extra P2 FPN layer
 )
 
-
-
-INFERENCE_SCORE_THRESH = 0.1
-INFERENCE_NMS_THRESH = 0.4
-PRF1_THRESH = 0.1
-IOU_THRESH_METRIC = 0.5
 
 # -------- SHARED BASE CONFIG -------- #
 
@@ -111,6 +112,8 @@ COMMON_BACKBONE_FPN_CONFIG = {
     "include_p2_fpn": INCLUDE_P2_FPN,
     "fpn_out_channels": FPN_OUT_CHANNELS,
     "pretrained_backbone": True,
+    "load_weights_from_ckpt": BACKBONE_MODEL_WEIGHTS,
+    "ckpt_model_key_prefix": "model."
 }
 
 

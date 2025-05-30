@@ -1,6 +1,7 @@
 # params_helper.py
-from util import log
 
+import torch
+from util import log
 
 def get_optimizer_param_groups(model, config):
     """Creates parameter groups for the optimizer with differential learning rates"""
@@ -117,3 +118,42 @@ def get_optimizer_param_groups(model, config):
         return [{'params': model.parameters(), 'lr': base_lr}]
 
     return final_param_groups
+
+
+def get_state_dict_from_ckpt(ckpt_path: str, model_key_prefix: str = 'model.') -> dict:
+    """Loads a .ckpt checkpoint file and extracts the state_dict for the nn.Module"""
+    # load checkpoint
+    try:
+        checkpoint = torch.load(ckpt_path, map_location="cpu")
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Checkpoint file not found: {ckpt_path}")
+    except Exception as e:
+        raise RuntimeError(f"Failed to load checkpoint at {ckpt_path}: {e}")
+
+    # extract state_dict
+    if "state_dict" not in checkpoint:
+        raise KeyError(f"'state_dict' key not found in checkpoint: {ckpt_path}")
+
+    state_dict = checkpoint["state_dict"]
+
+    # return full state_dict if no prefix specified
+    if not model_key_prefix:
+        log(f"INFO: Returning full state_dict from {ckpt_path}.")
+        return state_dict
+
+    # filter and strip prefix
+    filtered = {
+        k[len(model_key_prefix):]: v
+        for k, v in state_dict.items()
+        if k.startswith(model_key_prefix)
+    }
+
+    if not filtered:
+        sample = list(state_dict.keys())[:5]
+        raise KeyError(
+            f"Prefix '{model_key_prefix}' not found in keys of checkpoint {ckpt_path}."
+            f" Sample keys: {sample}..."
+        )
+
+    log(f"Extracted {len(filtered)} entries with prefix '{model_key_prefix}' from {ckpt_path}.")
+    return filtered
