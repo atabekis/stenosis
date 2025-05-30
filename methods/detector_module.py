@@ -704,7 +704,7 @@ class DetectionLightningModule(pl.LightningModule):
             raise ValueError(f"Unsupported optimizer: {opt_cfg['name']}")
 
 
-        if not self.scheduler_type == 'off':
+        if self.scheduler_type == 'off':
             log("Learning rate scheduler is DISABLED by 'scheduler_type=off'.")
             return optimizer
 
@@ -761,7 +761,7 @@ class DetectionLightningModule(pl.LightningModule):
 
         elif self.scheduler_type == "reduce":
             log(f"Using ReduceLROnPlateau scheduler, monitoring 'val_loss', patience={self.scheduler_patience_config}, factor=0.1.")
-            reduce_lr_scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=self.scheduler_patience_config, verbose=True)
+            reduce_lr_scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=self.scheduler_patience_config)
             return {
                 "optimizer": optimizer,
                 "lr_scheduler": {
