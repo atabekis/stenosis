@@ -49,7 +49,7 @@ BASE_CONFIG_SINGLE_GPU = {
     'gradient_clip_val': 1.0,
     'warmup_steps': 100,
     'scheduler': 'cosine',
-    'scheduler_patience_config': 10, # patience for mode 'reduce', used as patience in ReduceLROnPlateau
+    'scheduler_patience_config': 5, # patience for mode 'reduce', used as patience in ReduceLROnPlateau
     'patience': 15,
     'normalize_params': DEFAULT_NORMALIZE_PARAMS,
     'precision': '16-mixed',

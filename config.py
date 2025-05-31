@@ -16,12 +16,11 @@ DANILOV_DATASET_PATH = DANILOV_DATASET_DIR / "dataset"
 
 LOGS_DIR = PROJECT_ROOT / "logs"
 
-BACKBONE_MODEL_WEIGHTS = "logs/FPNRetinaNet/debug/version_4/checkpoints/last.ckpt" # using pretrained model checkpoint
+BACKBONE_MODEL_WEIGHTS = None # using pretrained model checkpoint
 
 # ------------- CONTROLS --------------- #
 DEBUG = False
 DEBUG_SIZE = 0.05  # keep % (DEBUG_SIZE * 100) of data
-
 
 CADICA_NEGATIVE_ONLY_ON_BOTH = True  # when loading both datasets, this will load only the negative frames from CADICA
 
@@ -37,7 +36,7 @@ REMOTE_TEST_COMMAND = 'TEST\n'
 #  T_CLIP is used to set the length of a video sequence to T_CLIP frames, this is applied universally
 #  if a video has > T_CLIP frames, T_CLIP of them used. If a video has < T_CLIP, then the video is
 #  padded till it reaches T_CLIP frames
-T_CLIP = 24
+T_CLIP = 8
 
 TRAIN_SIZE = 0.7
 VAL_SIZE = 0.2
@@ -101,7 +100,7 @@ OPTIMIZER_CONFIG = {
         "lr_fpn": 1e-4,
         "lr_transformer_thanos": 5e-5,
         "lr_regression_head": 1e-4,
-        "lr_classification_head": 5e-5,
+        "lr_classification_head": 1e-5,
         "lr_other": 1e-5
     }
 }
@@ -134,7 +133,7 @@ CUSTOM_CLS_HEAD_CONFIG = {
     "custom_head":  True,
 
     "classification_head_dropout_p": 0.3,
-    "classification_head_num_convs": 4,
+    "classification_head_num_convs": 3,
     "classification_head_use_groupnorm": True,
     "classification_head_num_gn_groups": 32,
 }

@@ -3,19 +3,16 @@
 # Python imports
 import os
 import re
-from collections import defaultdict
-
 import cv2
 import random
 
 import numpy as np
 import pandas as pd
 import concurrent.futures
-
 from typing import Union
+from collections import defaultdict
 from pathlib import WindowsPath, Path
 
-import config
 # Local imports
 from util import log
 from config import DEBUG, DEBUG_SIZE, DEFAULT_WIDTH, DEFAULT_HEIGHT, T_CLIP
@@ -184,6 +181,7 @@ class Reader:
             return df
 
 
+
     def get(self, patient_id: int =None, video_id: int =None, frame_nr: int =None,
             return_videos: bool =False, return_frames: bool =False,
             lesion: bool | None = None) -> Union['XCAImage', list['XCAImage']]:
@@ -318,6 +316,7 @@ class Reader:
 
         log(f'Reader constructed {len(videos)} total XCAVideo sub-segments (after potential splitting).')
         return sorted(videos, key=lambda v: (v.dataset, v.patient_id, v.video_id, v.subsegment_id))
+
 
 
     def __repr__(self):
