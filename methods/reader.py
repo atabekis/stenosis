@@ -15,8 +15,8 @@ from pathlib import WindowsPath, Path
 
 # Local imports
 from util import log
-from config import DEBUG, DEBUG_SIZE, DEFAULT_WIDTH, DEFAULT_HEIGHT, T_CLIP
-from config import DANILOV_DATASET_DIR, DANILOV_DATASET_PATH, CADICA_DATASET_DIR
+from config import DANILOV_DATASET_DIR, CADICA_DATASET_DIR
+from config import DEBUG, DEBUG_SIZE, DEFAULT_WIDTH, DEFAULT_HEIGHT
 from config import CADICA_NEGATIVE_ONLY_ON_BOTH, MIN_SUBSEGMENT_LENGTH
 
 from methods.video_utils import split_frames_into_subsegments

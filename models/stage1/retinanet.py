@@ -96,11 +96,13 @@ class FPNRetinaNet(nn.Module):
             num_classes=num_classes,
             anchor_generator=self.anchor_generator,
             score_thresh=score_thresh,
-            nms_threshold=nms_thresh,
+            nms_thresh=nms_thresh,
             detections_per_img=detections_per_img,
 
             max_size=DEFAULT_HEIGHT,  # if these are not passed, RetinaNet automatically upscales the images to 800x800
             min_size=DEFAULT_HEIGHT,  # but the anchor configuration stays the same (512x512) which is a big no no
+
+            topk_candidates=500  # default
         )
 
         if use_custom_classification_head:

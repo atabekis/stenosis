@@ -17,7 +17,7 @@ from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 
 # Local imports
 from util import log
-from config import LOGS_DIR, TEST_MODEL_ON_KEYBOARD_INTERRUPT, DEBUG
+from config import LOGS_DIR, DEBUG
 from methods.callbacks import TestOnKeyboardInterruptCallback, RemoteTestTriggerCallback
 
 

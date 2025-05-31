@@ -16,7 +16,8 @@ DANILOV_DATASET_PATH = DANILOV_DATASET_DIR / "dataset"
 
 LOGS_DIR = PROJECT_ROOT / "logs"
 
-BACKBONE_MODEL_WEIGHTS = None # using pretrained model checkpoint
+# BACKBONE_MODEL_WEIGHTS = "logs/FPNRetinaNet/augmented/version_1/checkpoints/last.ckpt" # using pretrained model checkpoint
+BACKBONE_MODEL_WEIGHTS = None
 
 # ------------- CONTROLS --------------- #
 DEBUG = False
@@ -50,12 +51,12 @@ NUM_WORKERS = 8
 
 
 # -------------- DATA MANIPULATION ---------- #
-DEFAULT_WIDTH, DEFAULT_HEIGHT = 512, 512  # pixels
+DEFAULT_WIDTH = DEFAULT_HEIGHT = 512  # pixels
 
 
 APPLY_ADAPTIVE_CONTRAST = True
 USE_STD_DEV_CHECK_FOR_CLAHE = True # if False, contrast will be applied to every image
-ADAPTIVE_CONTRAST_LOW_STD_THRESH = 25.0  # if std < thresh, contrast is applied
+ADAPTIVE_CONTRAST_LOW_STD_THRESH = 20.0  # if std < thresh, contrast is applied
 CLAHE_CLIP_LIMIT = 5.0
 CLAHE_TILE_GRID_SIZE = (8, 8)
 
@@ -77,7 +78,7 @@ IOU_THRESH_METRIC = 0.5  # used in metric calculation, IoU@0.5
 
 
 # DEFAULTS
-DEFAULT_BACKBONE_VARIANT = 'b0'   # can be 'b0', 'v2_s', 'resnet18', 'resnet34'
+DEFAULT_BACKBONE_VARIANT = 'b0'   # can be 'b0', 'v2_s', 'resnet18', 'resnet34' (implemented only for stage 1 for now)
 INCLUDE_P2_FPN = True
 FPN_OUT_CHANNELS = 256
 
