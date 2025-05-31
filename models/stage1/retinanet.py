@@ -102,7 +102,7 @@ class FPNRetinaNet(nn.Module):
             max_size=DEFAULT_HEIGHT,  # if these are not passed, RetinaNet automatically upscales the images to 800x800
             min_size=DEFAULT_HEIGHT,  # but the anchor configuration stays the same (512x512) which is a big no no
 
-            topk_candidates=500  # default
+            topk_candidates=1000  # default
         )
 
         if use_custom_classification_head:

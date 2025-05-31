@@ -282,7 +282,7 @@ class Experiment:
 
         rc = self.run_config
 
-        if rc['dataset_dir'].lower() in dataset_map.keys():
+        if str(rc['dataset_dir']).lower() in dataset_map.keys():
             rc['dataset_dir'] = dataset_map[rc['dataset_dir']]
 
 
