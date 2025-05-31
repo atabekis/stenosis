@@ -1,13 +1,21 @@
 # tsm_load_weights.py
-
-# Torch imports
-import torch.nn as nn
-from torch.hub import load_state_dict_from_url
-from torchvision.models._utils import _make_divisible
+# this is the most cursed file in this project :(
 
 # Python & local imports
 import math
 from functools import partial
+from collections import OrderedDict
+from typing import Callable, Optional
+
+
+# Torch imports
+import torch
+import torch.nn as nn
+from torch.hub import load_state_dict_from_url
+from torchvision.models._utils import _make_divisible
+
+
+from models.common.params_helper import get_state_dict_from_ckpt
 
 from util import log
 
@@ -67,8 +75,6 @@ def _efficientnet_conf(width_mult: float, depth_mult: float, **kwargs: any) -> l
         bneck_conf(expand_ratio=6, kernel=3, stride=1, input_channels=192, out_channels=320, num_layers=1),
     ]
 
-
-# --- End of definitions needed for weight loading ---
 
 
 def load_tsm_efficientnet_pretrained_weights(
@@ -238,14 +244,152 @@ def load_tsm_efficientnet_pretrained_weights(
     return stats
 
 
-if __name__ == '__main__':
-    from tsm_backbone import tsm_efficientnet_b0
-    test_model = tsm_efficientnet_b0(pretrained=False, time_dim=1, shift_fraction=0.0)
+
+
+EFFICIENTNET_B0_MBConv_CONFIGS = _efficientnet_conf(width_mult=1.0, depth_mult=1.0)
+
+
+def transfer_weights(s1_weights: dict[str, any], prefix: str, target_module: nn.Module, key_mapper = None) -> None:
+    """
+    Unfortunately some complex weight transferring code since we manually insert TSM into the effnet features.
+
+    Copy matching weights from s1_weights (keys starting with 'prefix) into target_module. If key_mapper is provided,
+    it maps each target key to its corresponding suffix in s1_weights
+    """
+    if target_module is None:
+        return
+
+    tgt_state = target_module.state_dict()
+    to_load = OrderedDict()
+    loaded = skipped_missing = skipped_shape = 0
+
+    for tgt_key, tgt_param in tgt_state.items():
+        suffix = key_mapper(tgt_key) if key_mapper else tgt_key
+        if not suffix:
+            skipped_missing += 1
+            continue
+
+        s1_key = prefix + suffix
+        if s1_key in s1_weights:
+            s1_param = s1_weights[s1_key]
+            if s1_param.shape == tgt_param.shape:
+                to_load[tgt_key] = s1_param
+                loaded += 1
+            else:
+                skipped_shape += 1
+        else:
+            skipped_missing += 1
+
+    if to_load:
+        target_module.load_state_dict(to_load, strict=False)
+
+
+def map_tsm_to_stage1_key(s2_key: str, effnet_configs: list[any] = EFFICIENTNET_B0_MBConv_CONFIGS) -> Optional[str]:
+    """
+    Again, we need some ugly code to map TSM-enhanced EffNet to the given stage 1 keys
+    Maps a TSMEfficientNet.features key to its suffix in Stage 1 backbone.body.
+    The more detailed architecture of the EfficientNet backbone can be found in the torchvision documentation
+    """
+    parts = s2_key.split(".")
+
+    # 1. stem conv: stem_conv.X -> 0.X
+    if parts[0] == "stem_conv":
+        return f"0.{'.'.join(parts[1:])}"
+
+    # 2. top conv: top_conv.X -> 8.X
+    if parts[0] == "top_conv":
+        return f"8.{'.'.join(parts[1:])}"
+
+    # 3. MBConv stages
+    if parts[0].startswith("stage") and len(parts) >= 5 and parts[2] == "block":
+        try:
+            s2_stage = int(parts[0][5:]) # stage number (1-based)
+            s2_block = int(parts[1][5:]) # block number
+            component = parts[3] # expand_conv / dwconv / se / project_conv
+            remainder = ".".join(parts[4:]) # examples:  "0.weight" or "fc1.bias"
+
+            if not (1 <= s2_stage <= len(effnet_configs)):
+                return None
+
+            cfg = effnet_configs[s2_stage - 1]
+            has_expand = (cfg.expand_ratio != 1.0)
+
+            # determine MBConv internal index
+            if component == "expand_conv":
+                if not has_expand: return None
+                inner_idx = "0"
+
+            elif component == "dwconv":
+                inner_idx = "1" if has_expand else "0"
+
+            elif component == "se":
+                inner_idx = "2" if has_expand else "1"
+
+            elif component == "project_conv":
+                inner_idx = "3" if has_expand else "2"
+
+            else:
+                return None
+
+            s1_stage_idx = s2_stage # stage 1 features index matches stage number
+            s1_block_idx = s2_block - 1 # 0-based block index
+            return f"{s1_stage_idx}.{s1_block_idx}.block.{inner_idx}.{remainder}"
+
+        except (ValueError, IndexError):
+            return None
+    return None
+
+
+def transfer_to_tsm_retinanet(
+        tsm_model: nn.Module,
+        ckpt_path: str,
+        ckpt_prefix: str = "model.",
+        effnet_configs: list[any] = EFFICIENTNET_B0_MBConv_CONFIGS
+) -> None:
+    """
+    Copy weights from FPNRetinaNet checkpoint into a TSMRetinaNet
+
+    Currently, due to the implementation of torchvision and my load_tsm_efficientnet_pretrained_weights function,
+    out of 358 keys, 330 are loaded and 28 are skipped. This is expected behavior and (hopefully) not a huge deal.
+    """
     try:
-        from torchvision.models import EfficientNet_B0_Weights
-        url = EfficientNet_B0_Weights.IMAGENET1K_V1.url
-    except ImportError:
-        url = "https://download.pytorch.org/models/efficientnet_b0_rwightman-7f5810bc.pth"
-    results = load_tsm_efficientnet_pretrained_weights(test_model, url)
-    log(results)
-    pass
+        s1_weights = get_state_dict_from_ckpt(ckpt_path, ckpt_prefix)
+    except Exception as e:
+        log(f"Error loading checkpoint: {e}. Aborting.")
+        return
+
+    if not s1_weights:
+        log(f"No weights found in checkpoint. Aborting.")
+        return
+
+    # 1. backbone → tsm_model.tsm_effnet.features
+    tsm_feats = getattr(getattr(tsm_model, "tsm_effnet", None), "features", None)
+    if tsm_feats is not None:
+        transfer_weights(
+            s1_weights,
+            prefix="backbone.body.",
+            target_module=tsm_feats,
+            key_mapper=lambda k: map_tsm_to_stage1_key(k, effnet_configs)
+        )
+    else:
+        log(f"'tsm_effnet.features' not found. Skipping backbone transfer.")
+
+    # 2. FPN → tsm_model.fpn
+    if hasattr(tsm_model, "fpn"):
+        transfer_weights(
+            s1_weights,
+            prefix="backbone.fpn.",
+            target_module=tsm_model.fpn
+        )
+    else:
+        log(f"'fpn' module not found. Skipping FPN transfer.")
+
+    # 3. head → tsm_model.head
+    if hasattr(tsm_model, "head"):
+        transfer_weights(
+            s1_weights,
+            prefix="retinanet.head.",
+            target_module=tsm_model.head
+        )
+    else:
+        log(f"'head' module not found. Skipping head transfer.")

@@ -28,12 +28,10 @@ class TestOnKeyboardInterruptCallback(pl.Callback):
             checkpoint_callback = trainer.checkpoint_callback
             if checkpoint_callback and hasattr(checkpoint_callback, 'best_model_path') and checkpoint_callback.best_model_path:
                 ckpt_to_test = checkpoint_callback.best_model_path
-                log(f"Using best model checkpoint for testing: {ckpt_to_test}")
 
             else:
                 log("No best_model_path found testing with 'last' checkpoint (if available) or current model weights.")
                 ckpt_to_test = "last"
-
 
             log(f"Starting test with checkpoint: {ckpt_to_test if ckpt_to_test else 'current model weights'}.")
             trainer.test(model=pl_module, datamodule=trainer.datamodule, ckpt_path=ckpt_to_test)

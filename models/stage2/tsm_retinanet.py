@@ -19,8 +19,9 @@ from torchvision.models.detection.anchor_utils import AnchorGenerator
 from util import log
 
 
-from models.common.retinanet_utils import GNDropoutRetinaNetClassificationHead
 from models.stage2.tsm_backbone import tsm_efficientnet_b0
+from models.stage2.tsm_load_weights import transfer_to_tsm_retinanet
+from models.common.retinanet_utils import GNDropoutRetinaNetClassificationHead
 
 
 
@@ -44,6 +45,8 @@ class TSMRetinaNet(nn.Module):
         pretrained_backbone = config.get("pretrained_backbone", True)
         use_gradient_checkpointing = config.get("use_grad_ckpt", False)
 
+        include_p2_fpn = config.get("include_p2_fpn", False)
+
         self.t_clip = config["t_clip"]
         shift_fraction = config.get("tsm_shift_fraction", 0.125)
         shift_mode = config.get("tsm_shift_mode", 'residual')
@@ -59,11 +62,18 @@ class TSMRetinaNet(nn.Module):
         classification_head_use_groupnorm = config.get("classification_head_use_groupnorm", False)
         classification_head_num_gn_groups = config.get("classification_head_num_gn_groups", 32)
 
+        load_weights_ckpt_path = config.get("load_weights_from_ckpt", None)
+        ckpt_model_key_prefix = config.get("ckpt_model_key_prefix", 'model.')
+
+        if load_weights_ckpt_path:
+            pretrained_backbone = False
+
 
 
         log("Initializing TSMRetinaNet with parameters:")
         log(f"  Num classes: {self.num_classes}")
         log(f"  FPN out channels: {fpn_out_channels}")
+        log(f"  Include P2 in FPN: {include_p2_fpn}")
         log(f"  Anchor sizes: {anchor_sizes}")
         log(f"  Anchor aspect ratios: {anchor_aspect_ratios}")
         log(f"  Score threshold: {self.score_thresh}")
@@ -77,7 +87,7 @@ class TSMRetinaNet(nn.Module):
         log(f"  Use Custom Classification Head: {use_custom_classification_head}")
 
         # 1. TSM backbone
-        tsm_effnet = tsm_efficientnet_b0(
+        self.tsm_effnet = tsm_efficientnet_b0(
             pretrained=pretrained_backbone,
             time_dim=self.t_clip,
             shift_fraction=shift_fraction,
@@ -87,11 +97,17 @@ class TSMRetinaNet(nn.Module):
             use_gradient_checkpoint=use_gradient_checkpointing,
         )
 
-        return_layers = {'stage3': '0', 'stage5': '1', 'stage6': '2'} #p3, p4, p5
-        self.backbone = IntermediateLayerGetter(tsm_effnet.features, return_layers=return_layers)
+        if include_p2_fpn:
+            return_layers = {'stage2': '0', 'stage3': '1', 'stage5': '2', 'stage6': '3'} # p2, p3, p4, p5
+            fpn_in_channels_list = [24, 40, 112, 192]
+        else:
+            return_layers = {'stage3': '0', 'stage5': '1', 'stage6': '2'} #p3, p4, p5
+            fpn_in_channels_list = [40, 112, 192]
+
+
+        self.backbone = IntermediateLayerGetter(self.tsm_effnet.features, return_layers=return_layers)
 
         # 2. FPN
-        fpn_in_channels_list = [40, 112, 192]
         self.fpn = FeaturePyramidNetwork(in_channels_list=fpn_in_channels_list, out_channels=fpn_out_channels)
 
         # 3. anchor generator
@@ -134,6 +150,13 @@ class TSMRetinaNet(nn.Module):
             low_threshold=matcher_low_threshold,
             allow_low_quality_matches=matcher_allow_low_quality,
         )
+
+
+        if load_weights_ckpt_path:
+            log(f'Loading weights from checkpoint: {load_weights_ckpt_path}')
+            transfer_to_tsm_retinanet(self, load_weights_ckpt_path, ckpt_model_key_prefix)
+
+
 
     def forward(
         self,
@@ -246,3 +269,11 @@ class TSMRetinaNet(nn.Module):
             detections.append({"boxes": final_boxes, "scores": final_scores, "labels": final_labels})
 
         return detections
+
+
+if __name__ == "__main__":
+    from config import STAGE2_TSM_RETINANET_DEFAULT_CONFIG
+
+    STAGE2_TSM_RETINANET_DEFAULT_CONFIG['load_weights_from_ckpt'] = "../../logs/FPNRetinaNet/debug/version_4/checkpoints/last.ckpt"
+
+    model = TSMRetinaNet(config=STAGE2_TSM_RETINANET_DEFAULT_CONFIG)
