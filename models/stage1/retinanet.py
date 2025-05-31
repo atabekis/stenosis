@@ -94,7 +94,7 @@ class FPNRetinaNet(nn.Module):
             backbone=self.backbone,
             num_classes=num_classes,
             anchor_generator=self.anchor_generator,
-            score_threshold=score_thresh,
+            score_thresh=score_thresh,
             nms_threshold=nms_thresh,
             detections_per_img=detections_per_img,
         )
@@ -128,7 +128,7 @@ class FPNRetinaNet(nn.Module):
                 if missing: log(f"Warning: Missing keys (first 5): {missing[:5]}")
                 if unexpected: log(f"Warning: Unexpected keys (first 5): {unexpected[:5]}")
 
-                log(f"INFO: {"Successfully" if not (missing or unexpected) else "Partially"} loaded weights from checkpoint.")
+                log(f"{"Successfully" if not (missing or unexpected) else "Partially"} loaded weights from checkpoint.")
 
             else: log(f'Warning: Checkpoint yielded no weights; continuing with existing weights.')
 
@@ -144,3 +144,4 @@ class FPNRetinaNet(nn.Module):
         if isinstance(images, list):
             images = torch.stack(images, dim=0)
         return self.retinanet(images, targets)
+
