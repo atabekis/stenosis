@@ -15,6 +15,7 @@ from models.common.retinanet_utils import GNDropoutRetinaNetClassificationHead
 from models.common.params_helper import get_state_dict_from_ckpt
 
 from util import log
+from config import DEFAULT_HEIGHT  # square, one is enough
 
 
 class FPNRetinaNet(nn.Module):
@@ -97,6 +98,9 @@ class FPNRetinaNet(nn.Module):
             score_thresh=score_thresh,
             nms_threshold=nms_thresh,
             detections_per_img=detections_per_img,
+
+            max_size=DEFAULT_HEIGHT,  # if these are not passed, RetinaNet automatically upscales the images to 800x800
+            min_size=DEFAULT_HEIGHT,  # but the anchor configuration stays the same (512x512) which is a big no no
         )
 
         if use_custom_classification_head:
