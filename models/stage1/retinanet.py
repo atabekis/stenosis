@@ -128,7 +128,7 @@ class FPNRetinaNet(nn.Module):
                 if missing: log(f"Warning: Missing keys (first 5): {missing[:5]}")
                 if unexpected: log(f"Warning: Unexpected keys (first 5): {unexpected[:5]}")
 
-                log(f"{"Successfully" if not (missing or unexpected) else "Partially"} loaded weights from checkpoint.")
+                log(f"{'Successfully' if not (missing or unexpected) else 'Partially'} loaded weights from checkpoint.")
 
             else: log(f'Warning: Checkpoint yielded no weights; continuing with existing weights.')
 

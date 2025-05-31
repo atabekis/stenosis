@@ -10,7 +10,7 @@ import pytorch_lightning as pl
 
 # Local imports
 from util import log
-from config import TEST_MODEL_ON_KEYBOARD_INTERRUPT, REMOTE_TEST_PORT, REMOTE_TEST_COMMAND
+from config import REMOTE_TEST_PORT, REMOTE_TEST_COMMAND
 
 
 
@@ -22,6 +22,8 @@ class TestOnKeyboardInterruptCallback(pl.Callback):
         """
         when an exception occurs in training, validation, or testing loop.
         """
+        from config import TEST_MODEL_ON_KEYBOARD_INTERRUPT  # get the latest version
+
         if isinstance(exception, KeyboardInterrupt) and TEST_MODEL_ON_KEYBOARD_INTERRUPT:
             log("TEST_MODEL_ON_KEYBOARD_INTERRUPT=True. Testing model.")
 
