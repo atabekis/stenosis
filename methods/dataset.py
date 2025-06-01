@@ -101,9 +101,19 @@ class XCADataset(Dataset):
                 A.Rotate(limit=10, p=0.3),
                 A.Transpose(p=0.5),
 
+                A.ShiftScaleRotate(
+                    shift_limit_x=(-0.0625, 0.0625),
+                    shift_limit_y=(-0.0625, 0.0625),
+                    scale_limit=(-0.1, 0.1),
+                    rotate_limit=10,
+                    p=0.75,
+                    border_mode=cv2.BORDER_CONSTANT,
+                    fill=0
+                ),
+
                 # pixel-level
                 A.RandomBrightnessContrast(brightness_limit=0.15, contrast_limit=0.15, p=0.75),
-                # A.RandomGamma(gamma_limit=(80, 120), p=0.5),
+                A.RandomGamma(gamma_limit=(80, 120), p=0.5),
                 A.Sharpen(alpha=(0.2, 0.5), lightness=(0.5, 1.0), p=0.3),
                 # A.ImageCompression(quality_range=(80, 99), p=0.5),
                 # A.MultiplicativeNoise(multiplier=(0.5, 1.5), elementwise=True, per_channel=True, p=0.3),

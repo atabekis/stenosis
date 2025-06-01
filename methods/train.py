@@ -99,6 +99,7 @@ def train_model(
         save_on_train_epoch_end=False,
         every_n_epochs=1,
         save_last=True,
+
     )
 
     early_stop_callback = EarlyStopping(
@@ -132,12 +133,14 @@ def train_model(
             profiler = None
 
     accelerator_arg, devices_arg, estimated_num_devices = determine_device_config(gpus)
+    checkpoint_callback = checkpoint_callback_val
+
 
     trainer_kwargs = {
         'max_epochs': max_epochs,
         'gradient_clip_val': gradient_clip_val,
         'callbacks':
-            [checkpoint_callback_val,
+            [checkpoint_callback,
              early_stop_callback,
              test_on_interrupt_callback,
              test_on_remote_trigger,
@@ -170,7 +173,6 @@ def train_model(
 
     trainer = pl.Trainer(**trainer_kwargs)
 
-    checkpoint_callback = checkpoint_callback_val  # TODO: add control between two callbacks
 
     results_dict =  {
         "trainer": trainer,
@@ -178,25 +180,32 @@ def train_model(
         "checkpoint_callback": checkpoint_callback,
     }
 
-    if testing_ckpt_path:
+    if testing_ckpt_path:  # if we give a path, only test the model weights
         log(f"Performing testing only using checkpoint: {testing_ckpt_path}")
         trainer.test(lightning_module, datamodule=data_module, ckpt_path=testing_ckpt_path)
         results_dict["tested_checkpoint_path"] = testing_ckpt_path
-    else:
+        return results_dict
+
+    log(f"Starting training. Resuming from checkpoint: {bool(resume_from_ckpt_path)}")  # if no test path is given, start training
+    trainer.fit(lightning_module, data_module, ckpt_path=resume_from_ckpt_path)
+
+
+    if checkpoint_callback and checkpoint_callback.best_model_path:  # get best model based on val_loss or val_mAP
         ckpt_to_test = checkpoint_callback.best_model_path
+        log(f"Best model checkpoint found: {ckpt_to_test}")
 
-        log(f'Starting training. Resuming from checkpoint: {True if resume_from_ckpt_path else False}')
-        trainer.fit(lightning_module, data_module, ckpt_path=resume_from_ckpt_path)
+    elif checkpoint_callback and checkpoint_callback.last_model_path: # if not found default to the last ckpt
+        ckpt_to_test = checkpoint_callback.last_model_path
+        log(f"No best checkpoint found; using last model checkpoint: {ckpt_to_test}")
+    else:
+        ckpt_to_test = "last"
+        log("No checkpoint files found—falling back to 'last' for trainer.test().")
 
-        if not ckpt_to_test:
-            log("No best model checkpoint found from this training run. Attempting to test 'last' checkpoint.")
-            ckpt_to_test = 'last'
-
-        log(f"Finished training. Testing with checkpoint: {ckpt_to_test}")
-        trainer.test(lightning_module, datamodule=data_module, ckpt_path=ckpt_to_test)
+    log(f"Finished training. Testing with checkpoint: {ckpt_to_test}")
+    trainer.test(lightning_module, datamodule=data_module, ckpt_path=ckpt_to_test)
+    results_dict["tested_checkpoint_path"] = ckpt_to_test
 
     return results_dict
-
 
 
 
