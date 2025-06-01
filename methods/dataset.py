@@ -101,14 +101,17 @@ class XCADataset(Dataset):
                 A.Rotate(limit=10, p=0.3),
                 A.Transpose(p=0.5),
 
-                A.ShiftScaleRotate(
-                    shift_limit_x=(-0.0625, 0.0625),
-                    shift_limit_y=(-0.0625, 0.0625),
-                    scale_limit=(-0.1, 0.1),
-                    rotate_limit=10,
+                A.Affine(
+                    scale=(0.9, 1.1),
+                    translate_percent={'x': (-0.0625, 0.0625), 'y': (-0.0625, 0.0625)},
+                    rotate=(-10, 10),
+                    shear=0,
                     p=0.75,
                     border_mode=cv2.BORDER_CONSTANT,
-                    fill=0
+                    fill=0,
+                    fit_output=False,
+                    keep_ratio=False,
+                    balanced_scale=False,
                 ),
 
                 # pixel-level

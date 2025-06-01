@@ -454,12 +454,21 @@ class DetectionLightningModule(pl.LightningModule):
                 )
 
         # 3b. learning rate
-        scheduler = self.lr_schedulers()
+        # scheduler = self.lr_schedulers()
+        # current_lr = 0.0
+        # if scheduler:
+        #     current_lr = scheduler.get_last_lr()[0]
+        # self.log('train/lr', current_lr, on_step=True, on_epoch=False, logger=True, batch_size=batch_size)
+        opts = self.optimizers()
         current_lr = 0.0
-        if scheduler:
-            current_lr = scheduler.get_last_lr()[0]
-        self.log('train/lr', current_lr, on_step=True, on_epoch=False, logger=True, batch_size=batch_size)
+        if opts:
+            if not isinstance(opts, list):
+                opts = [opts]
 
+            if opts[0] and hasattr(opts[0], 'param_groups') and opts[0].param_groups:
+                current_lr = opts[0].param_groups[0]['lr']
+
+        self.log('train/lr', current_lr, on_step=True, on_epoch=False, logger=True, batch_size=batch_size)
         return total_loss
 
 
