@@ -1,5 +1,4 @@
 # tsm_load_weights.py
-# this is the most cursed file in this project :(
 
 # Python & local imports
 import math
@@ -15,9 +14,8 @@ from torch.hub import load_state_dict_from_url
 from torchvision.models._utils import _make_divisible
 
 
-from models.common.params_helper import get_state_dict_from_ckpt
-
 from util import log
+from models.common.params_helper import get_state_dict_from_ckpt
 
 
 class MBConvConfig:
@@ -248,13 +246,17 @@ def load_tsm_efficientnet_pretrained_weights(
 
 EFFICIENTNET_B0_MBConv_CONFIGS = _efficientnet_conf(width_mult=1.0, depth_mult=1.0)
 
-
-def transfer_weights(s1_weights: dict[str, any], prefix: str, target_module: nn.Module, key_mapper = None) -> None:
+def transfer_weights(
+    s1_weights: dict[str, any],
+    prefix: str,
+    target_module: torch.nn.Module,
+    key_mapper: Optional[Callable[[str], Optional[str]]] = None
+) -> None:
     """
-    Unfortunately some complex weight transferring code since we manually insert TSM into the effnet features.
-
-    Copy matching weights from s1_weights (keys starting with 'prefix) into target_module. If key_mapper is provided,
-    it maps each target key to its corresponding suffix in s1_weights
+    Copy matching weights from s1_weights (with keys starting with `prefix`)
+    into `target_module`. If `key_mapper` is provided, it maps each target key
+    to its corresponding suffix in s1_weights (without `prefix`). Only tensors
+    with identical shapes are transferred. Uses strict=False when loading.
     """
     if target_module is None:
         return
@@ -283,60 +285,66 @@ def transfer_weights(s1_weights: dict[str, any], prefix: str, target_module: nn.
     if to_load:
         target_module.load_state_dict(to_load, strict=False)
 
+    log(
+        f"Module '{target_module.__class__.__name__}' | "
+        f"Total keys: {len(tgt_state)}, "
+        f"Loaded: {loaded}, "
+        f"Skipped (missing): {skipped_missing}, "
+        f"Skipped (shape): {skipped_shape}"
+    )
 
-def map_tsm_to_stage1_key(s2_key: str, effnet_configs: list[any] = EFFICIENTNET_B0_MBConv_CONFIGS) -> Optional[str]:
+
+def map_tsm_to_stage1_key(
+    s2_key: str,
+    effnet_configs: list[any] = EFFICIENTNET_B0_MBConv_CONFIGS
+) -> Optional[str]:
     """
-    Again, we need some ugly code to map TSM-enhanced EffNet to the given stage 1 keys
-    Maps a TSMEfficientNet.features key to its suffix in Stage 1 backbone.body.
-    The more detailed architecture of the EfficientNet backbone can be found in the torchvision documentation
+    Map a TSMEfficientNet.features key (s2_key) to its suffix in Stage-1 BackboneV2.body.
+    Returns None if no valid mapping exists.
     """
     parts = s2_key.split(".")
 
-    # 1. stem conv: stem_conv.X -> 0.X
+    # 1) Stem conv: "stem_conv.X" -> "0.X"
     if parts[0] == "stem_conv":
         return f"0.{'.'.join(parts[1:])}"
 
-    # 2. top conv: top_conv.X -> 8.X
+    # 2) Top conv: "top_conv.X" -> "8.X" (may not exist in Stage-1)
     if parts[0] == "top_conv":
         return f"8.{'.'.join(parts[1:])}"
 
-    # 3. MBConv stages
+    # 3) MBConv stages (e.g., "stage1.block1.block.expand_conv.0.weight")
     if parts[0].startswith("stage") and len(parts) >= 5 and parts[2] == "block":
         try:
-            s2_stage = int(parts[0][5:]) # stage number (1-based)
-            s2_block = int(parts[1][5:]) # block number
-            component = parts[3] # expand_conv / dwconv / se / project_conv
-            remainder = ".".join(parts[4:]) # examples:  "0.weight" or "fc1.bias"
+            s2_stage = int(parts[0][5:])            # stage number (1-based)
+            s2_block = int(parts[1][5:])            # block number (1-based)
+            component = parts[3]                     # expand_conv / dwconv / se / project_conv
+            remainder = ".".join(parts[4:])         # e.g., "0.weight" or "fc1.bias"
 
             if not (1 <= s2_stage <= len(effnet_configs)):
                 return None
 
             cfg = effnet_configs[s2_stage - 1]
             has_expand = (cfg.expand_ratio != 1.0)
-
-            # determine MBConv internal index
+            # Determine MBConv internal index
             if component == "expand_conv":
-                if not has_expand: return None
+                if not has_expand:
+                    return None
                 inner_idx = "0"
-
             elif component == "dwconv":
                 inner_idx = "1" if has_expand else "0"
-
             elif component == "se":
                 inner_idx = "2" if has_expand else "1"
-
             elif component == "project_conv":
                 inner_idx = "3" if has_expand else "2"
-
             else:
                 return None
 
-            s1_stage_idx = s2_stage # stage 1 features index matches stage number
-            s1_block_idx = s2_block - 1 # 0-based block index
+            s1_stage_idx = s2_stage                    # Stage-1 features index matches stage number
+            s1_block_idx = s2_block - 1                # 0-based block index
             return f"{s1_stage_idx}.{s1_block_idx}.block.{inner_idx}.{remainder}"
-
         except (ValueError, IndexError):
             return None
+
     return None
 
 
@@ -362,13 +370,15 @@ def transfer_to_tsm_retinanet(
         log(f"No weights found in checkpoint. Aborting.")
         return
 
-    # 1. backbone → tsm_model.tsm_effnet.features
-    tsm_feats = getattr(getattr(tsm_model, "tsm_effnet", None), "features", None)
-    if tsm_feats is not None:
+    # 1. backbone → tsm_model.backbone.features
+    effnet_instance = getattr(tsm_model, "backbone", None)
+    tsm_feats_module = getattr(effnet_instance, "features", None) if effnet_instance else None
+
+    if tsm_feats_module is not None:
         transfer_weights(
             s1_weights,
             prefix="backbone.body.",
-            target_module=tsm_feats,
+            target_module=tsm_feats_module,
             key_mapper=lambda k: map_tsm_to_stage1_key(k, effnet_configs)
         )
     else:

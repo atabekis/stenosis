@@ -87,7 +87,7 @@ class TSMRetinaNet(nn.Module):
         log(f"  Use Custom Classification Head: {use_custom_classification_head}")
 
         # 1. TSM backbone
-        self.tsm_effnet = tsm_efficientnet_b0(
+        self.backbone = tsm_efficientnet_b0(
             pretrained=pretrained_backbone,
             time_dim=self.t_clip,
             shift_fraction=shift_fraction,
@@ -105,7 +105,7 @@ class TSMRetinaNet(nn.Module):
             fpn_in_channels_list = [40, 112, 192]
 
 
-        self.backbone = IntermediateLayerGetter(self.tsm_effnet.features, return_layers=return_layers)
+        self.fpn_feature_extractor = IntermediateLayerGetter(self.backbone.features, return_layers=return_layers)
 
         # 2. FPN
         self.fpn = FeaturePyramidNetwork(in_channels_list=fpn_in_channels_list, out_channels=fpn_out_channels)
@@ -178,7 +178,7 @@ class TSMRetinaNet(nn.Module):
         image_sizes_list = [(H, W)] * (B * T)
         videos_reshaped = videos.view(B * T, C, H, W)
 
-        backbone_features = self.backbone(videos_reshaped)
+        backbone_features = self.fpn_feature_extractor(videos_reshaped)
 
         fpn_features = self.fpn(backbone_features)
         fpn_features_list = list(fpn_features.values())
