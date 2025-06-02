@@ -99,7 +99,7 @@ class XCADataset(Dataset):
                 # geometric
                 A.HorizontalFlip(p=0.5),
                 A.Rotate(limit=10, p=0.3),
-                A.Transpose(p=0.5),
+                # A.Transpose(p=0.5),
 
                 A.Affine(
                     scale=(0.9, 1.1),
@@ -120,18 +120,18 @@ class XCADataset(Dataset):
                 A.Sharpen(alpha=(0.2, 0.5), lightness=(0.5, 1.0), p=0.3),
                 # A.ImageCompression(quality_range=(80, 99), p=0.5),
                 # A.MultiplicativeNoise(multiplier=(0.5, 1.5), elementwise=True, per_channel=True, p=0.3),
-
+                #
                 A.OneOf([
                     A.GaussianBlur(blur_limit=(3, 5), p=0.5),
                     A.MotionBlur(blur_limit=(3, 5), p=0.5),
                     A.MedianBlur(blur_limit=3, p=0.3),
                 ], p=0.7),
 
-                # A.GaussNoise(std_range=(0.1, 0.3)),
-                A.CoarseDropout(num_holes_range=(1 ,4),
-                                hole_height_range=(0, int(DEFAULT_HEIGHT * 0.03)), hole_width_range=(0, int(DEFAULT_WIDTH * 0.04)),
-                                fill=0,
-                                p=0.3),
+                A.GaussNoise(p=0.5),
+                # A.CoarseDropout(num_holes_range=(1 ,4),
+                #                 hole_height_range=(0, int(DEFAULT_HEIGHT * 0.03)), hole_width_range=(0, int(DEFAULT_WIDTH * 0.04)),
+                #                 fill=0,
+                #                 p=0.3),
 
             ], bbox_params=bbox_params)
             self.video_aug_params = {}

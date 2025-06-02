@@ -5,7 +5,7 @@ from pathlib import Path
 from util import get_anchor_config
 
 # ------------ RANDOM SEED -------------- #
-SEED = 55
+SEED = 5
 
 # --------------- PATHS ----------------- #
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -17,19 +17,20 @@ DANILOV_DATASET_PATH = DANILOV_DATASET_DIR / "dataset"
 LOGS_DIR = PROJECT_ROOT / "logs"
 
 # BACKBONE_MODEL_WEIGHTS = "logs/FPNRetinaNet/augmented/version_1/checkpoints/last.ckpt" # using pretrained model checkpoint
+# BACKBONE_MODEL_WEIGHTS = ".checkpoints/both.ckpt" # using pretrained model checkpoint
 BACKBONE_MODEL_WEIGHTS = None
 
 # ------------- CONTROLS --------------- #
-DEBUG = False
-DEBUG_SIZE = 0.05  # keep % (DEBUG_SIZE * 100) of data
+DEBUG = True
+DEBUG_SIZE = 0.1  # keep % (DEBUG_SIZE * 100) of data
 
 CADICA_NEGATIVE_ONLY_ON_BOTH = True  # when loading both datasets, this will load only the negative frames from CADICA
 
 # CALLBACK CONTROLS
-TEST_MODEL_ON_KEYBOARD_INTERRUPT = True
+TEST_MODEL_ON_KEYBOARD_INTERRUPT = True  # pressing Ctrl+C during training will immediately stop training and test.
 
 # if in HPC, the command below will stop training and immediately test the model on available checkpoints:
-# echo "TEST" | nc -v hostname 3131   → hostname printed when training starts, for HPC it's a compute node such as mcs-gpua001
+# echo "TEST" | nc -v local_ip 3131   → local_ip printed when training starts
 REMOTE_TEST_PORT = 3131
 REMOTE_TEST_COMMAND = 'TEST\n'
 
@@ -51,12 +52,12 @@ NUM_WORKERS = 8
 
 
 # -------------- DATA MANIPULATION ---------- #
-DEFAULT_WIDTH = DEFAULT_HEIGHT = 512  # pixels
+DEFAULT_WIDTH = DEFAULT_HEIGHT = 800  # pixels
 
 
 APPLY_ADAPTIVE_CONTRAST = True
 USE_STD_DEV_CHECK_FOR_CLAHE = True # if False, contrast will be applied to every image
-ADAPTIVE_CONTRAST_LOW_STD_THRESH = 20.0  # if std < thresh, contrast is applied
+ADAPTIVE_CONTRAST_LOW_STD_THRESH = 21.0  # if std < thresh, contrast is applied
 CLAHE_CLIP_LIMIT = 5.0
 CLAHE_TILE_GRID_SIZE = (8, 8)
 
@@ -72,7 +73,7 @@ FOCAL_LOSS_GAMMA = 2.0
 DETECTIONS_PER_IMG_AFTER_NMS = 3  # give the model some flexibility
 
 INFERENCE_SCORE_THRESH = 0.35  # passed onto score_threshold in RetinaNet
-INFERENCE_NMS_THRESH = 0.4   # passed onto nms_thresh in RetinaNet
+INFERENCE_NMS_THRESH = 0.5   # passed onto nms_thresh in RetinaNet
 PRF1_THRESH = INFERENCE_SCORE_THRESH  # used in calculating the Precision Recall, F1 scores at a threshold
 IOU_THRESH_METRIC = 0.5  # used in metric calculation, IoU@0.5
 
@@ -82,30 +83,48 @@ DEFAULT_BACKBONE_VARIANT = 'b0'   # can be 'b0', 'v2_s', 'resnet18', 'resnet34' 
 INCLUDE_P2_FPN = True
 FPN_OUT_CHANNELS = 256
 
-DEFAULT_ANCHOR_SIZES, DEFAULT_ANCHOR_ASPECT_RATIOS = get_anchor_config(  # get auto-scaled anchor sizes based on:
-    current_img_width=DEFAULT_WIDTH,  # image sizes
-    current_img_height=DEFAULT_HEIGHT,
-    include_p2_fpn=INCLUDE_P2_FPN, # whether to include extra P2 FPN layer
-)
+
+DEFAULT_ANCHOR_SIZES =  ((16.0, 20.16, 25.4), (32.0, 40.32, 50.8), (64.0, 80.63, 101.59), (128.0, 161.27, 203.19))
+DEFAULT_ANCHOR_ASPECT_RATIOS = ((0.5, 1.0, 2.0), (0.5, 1.0, 2.0), (0.5, 1.0, 2.0), (0.5, 1.0, 2.0))
+
+# DEFAULT_ANCHOR_SIZES, DEFAULT_ANCHOR_ASPECT_RATIOS = get_anchor_config(  # get auto-scaled anchor sizes based on:
+#     current_img_width=DEFAULT_WIDTH,  # image sizes
+#     current_img_height=DEFAULT_HEIGHT,
+#     include_p2_fpn=INCLUDE_P2_FPN, # whether to include extra P2 FPN layer
+# )
 
 
 # -------- SHARED BASE CONFIG -------- #
 
+
 OPTIMIZER_CONFIG = {
     'name': 'Adamw',
-    'base_lr': 5e-4,
-    'weight_decay': 5e-4,
+    'base_lr': 1e-4,
+    'weight_decay': 1e-5,
     "differential_lr": {
         "enabled": True,  # false to use base_lr for all params
         "lr_backbone": 1e-4,
         "lr_fpn": 1e-4,
         "lr_transformer_thanos": 5e-5,
         "lr_regression_head": 1e-4,
-        "lr_classification_head": 1e-5,
+        "lr_classification_head": 5e-6,
         "lr_other": 1e-5
     }
 }
-
+# OPTIMIZER_CONFIG = {
+#     'name': 'Adamw',
+#     'base_lr': 1e-4,
+#     'weight_decay': 1e-4,
+#     "differential_lr": {
+#         "enabled": True,  # false to use base_lr for all params
+#         "lr_backbone": 1e-5,
+#         "lr_fpn": 2e-5,
+#         "lr_transformer_thanos": 1e-6,
+#         "lr_regression_head": 5e-5,
+#         "lr_classification_head": 1e-4,
+#         "lr_other": 1e-6
+#     }
+# }
 
 COMMON_BACKBONE_FPN_CONFIG = {
     "backbone_variant": DEFAULT_BACKBONE_VARIANT,
