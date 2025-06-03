@@ -54,7 +54,7 @@ class RemoteTestTriggerCallback(pl.Callback):
                  port: int = REMOTE_TEST_PORT,
                  command: str = REMOTE_TEST_COMMAND):
         super().__init__()
-        self.port = port
+        self.port = port  # main port to be used
         self.command = command.strip()
         self._trigger = threading.Event()
         self._server: socketserver.ThreadingTCPServer | None = None
@@ -85,13 +85,23 @@ class RemoteTestTriggerCallback(pl.Callback):
         except socket.error:
             ip_addr = 'unresolved'
 
-        log(f'Compute node hostname: {hostname}, IP address: {ip_addr}. Listening on port {self.port} for "{self.command}"')
 
         self._trigger.clear()
-        self._server = socketserver.ThreadingTCPServer(  # have to ssh into local
-            ('0.0.0.0', self.port),
-            type(self)._Handler
-        )
+
+        port = self.port
+        while True:  # if port is already in use, this will try incrementing ports instead of terminating program
+            try:
+                self._server = socketserver.ThreadingTCPServer(  # have to ssh into local
+                    ('0.0.0.0', self.port),
+                    type(self)._Handler
+                )
+                self.port = port
+                break
+            except OSError:
+                port += 1
+
+        log(f'Compute node hostname: {hostname}, IP address: {ip_addr}. Listening on port {self.port} for "{self.command}"')
+
         self._server.callback = self
         self._server.daemon_threads = True
         self._server.allow_reuse_address = True
