@@ -178,32 +178,35 @@ def train_model(
         "trainer": trainer,
         "logger": logger,
         "checkpoint_callback": checkpoint_callback,
+        "final_test_metrics": None,
+        "final_test_results": None,
     }
 
-    if testing_ckpt_path:  # if we give a path, only test the model weights
+    if testing_ckpt_path:
         log(f"Performing testing only using checkpoint: {testing_ckpt_path}")
-        trainer.test(lightning_module, datamodule=data_module, ckpt_path=testing_ckpt_path)
-        results_dict["tested_checkpoint_path"] = testing_ckpt_path
-        return results_dict
-
-    log(f"Starting training. Resuming from checkpoint: {bool(resume_from_ckpt_path)}")  # if no test path is given, start training
-    trainer.fit(lightning_module, data_module, ckpt_path=resume_from_ckpt_path)
-
-
-    if checkpoint_callback and checkpoint_callback.best_model_path:  # get best model based on val_loss or val_mAP
-        ckpt_to_test = checkpoint_callback.best_model_path
-        log(f"Best model checkpoint found: {ckpt_to_test}")
-
-    elif checkpoint_callback and checkpoint_callback.last_model_path: # if not found default to the last ckpt
-        ckpt_to_test = checkpoint_callback.last_model_path
-        log(f"No best checkpoint found; using last model checkpoint: {ckpt_to_test}")
+        ckpt_to_test = testing_ckpt_path
     else:
-        ckpt_to_test = "last"
-        log("No checkpoint files found—falling back to 'last' for trainer.test().")
+        log(f"Starting training. Resuming from checkpoint: {bool(resume_from_ckpt_path)}")
+        trainer.fit(lightning_module, data_module, ckpt_path=resume_from_ckpt_path)
 
-    log(f"Finished training. Testing with checkpoint: {ckpt_to_test}")
+        if checkpoint_callback and checkpoint_callback.best_model_path:
+            ckpt_to_test = checkpoint_callback.best_model_path
+            log(f"Best model checkpoint found: {ckpt_to_test}")
+        elif checkpoint_callback and checkpoint_callback.last_model_path:
+            ckpt_to_test = checkpoint_callback.last_model_path
+            log(f"No best checkpoint found; using last model checkpoint: {ckpt_to_test}")
+        else:
+            ckpt_to_test = "last"
+            log("No checkpoint files found, falling back to 'last' for trainer.test().")
+
+    log(f"Testing with checkpoint: {ckpt_to_test}")
     trainer.test(lightning_module, datamodule=data_module, ckpt_path=ckpt_to_test)
-    results_dict["tested_checkpoint_path"] = ckpt_to_test
+
+    results_dict.update({
+        "tested_checkpoint_path": ckpt_to_test,
+        "final_test_metrics": lightning_module.final_test_metrics,
+        "final_test_results": lightning_module.final_test_results,
+    })
 
     return results_dict
 
