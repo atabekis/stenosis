@@ -5,7 +5,7 @@ from pathlib import Path
 from util import get_anchor_config
 
 # ------------ RANDOM SEED -------------- #
-SEED = 5
+SEED = 55
 
 # --------------- PATHS ----------------- #
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -16,8 +16,10 @@ DANILOV_DATASET_PATH = DANILOV_DATASET_DIR / "dataset"
 
 LOGS_DIR = PROJECT_ROOT / "logs"
 
+CHECKPOINTS_DIR = PROJECT_ROOT / '.checkpoints'
+
 # BACKBONE_MODEL_WEIGHTS = "logs/FPNRetinaNet/augmented/version_1/checkpoints/last.ckpt" # using pretrained model checkpoint
-# BACKBONE_MODEL_WEIGHTS = ".checkpoints/both.ckpt" # using pretrained model checkpoint
+# BACKBONE_MODEL_WEIGHTS = ".checkpoints/ep5.ckpt" # using pretrained model checkpoint
 BACKBONE_MODEL_WEIGHTS = None
 
 # ------------- CONTROLS --------------- #
@@ -100,14 +102,14 @@ DEFAULT_ANCHOR_ASPECT_RATIOS = ((0.5, 1.0, 2.0), (0.5, 1.0, 2.0), (0.5, 1.0, 2.0
 OPTIMIZER_CONFIG = {
     'name': 'Adamw',
     'base_lr': 1e-4,
-    'weight_decay': 1e-5,
+    'weight_decay': 5e-4,
     "differential_lr": {
         "enabled": True,  # false to use base_lr for all params
         "lr_backbone": 1e-4,
-        "lr_fpn": 1e-4,
+        "lr_fpn": 3e-5,
         "lr_transformer_thanos": 5e-5,
-        "lr_regression_head": 1e-4,
-        "lr_classification_head": 5e-6,
+        "lr_regression_head": 5e-5,
+        "lr_classification_head": 3e-5,
         "lr_other": 1e-5
     }
 }
@@ -117,12 +119,26 @@ OPTIMIZER_CONFIG = {
 #     'weight_decay': 1e-4,
 #     "differential_lr": {
 #         "enabled": True,  # false to use base_lr for all params
-#         "lr_backbone": 1e-5,
-#         "lr_fpn": 2e-5,
+#         "lr_backbone": 1e-6,
+#         "lr_fpn": 5e-6,
 #         "lr_transformer_thanos": 1e-6,
-#         "lr_regression_head": 5e-5,
-#         "lr_classification_head": 1e-4,
+#         "lr_regression_head": 1e-5,
+#         "lr_classification_head": 1e-5,
 #         "lr_other": 1e-6
+#     }
+# }
+# OPTIMIZER_CONFIG = {  # thanos
+#     'name': 'Adamw',
+#     'base_lr': 3e-5,
+#     'weight_decay': 1e-4,
+#     "differential_lr": {
+#         "enabled": True,  # false to use base_lr for all params
+#         "lr_backbone": 2e-5,
+#         "lr_fpn": 2e-5,
+#         "lr_transformer_thanos": 4e-5,
+#         "lr_regression_head": 4e-5,
+#         "lr_classification_head": 4e-5,
+#         "lr_other": 1e-5
 #     }
 # }
 
@@ -132,7 +148,9 @@ COMMON_BACKBONE_FPN_CONFIG = {
     "fpn_out_channels": FPN_OUT_CHANNELS,
     "pretrained_backbone": True,
     "load_weights_from_ckpt": BACKBONE_MODEL_WEIGHTS,
-    "ckpt_model_key_prefix": "model."
+    "ckpt_model_key_prefix": "model.",
+    "backbone_use_gn": False,
+    "backbone_num_gn_groups": 32,
 }
 
 
@@ -180,7 +198,7 @@ STAGE2_TSM_RETINANET_DEFAULT_CONFIG = {
     "t_clip": T_CLIP,
     "tsm_shift_fraction": 0.125,
     "tsm_shift_mode": "residual",
-    "tsm_effnet_stages_for_tsm": [3, 5, 6],
+    "tsm_effnet_stages_for_tsm": [3, 5],
     "matcher_high_threshold": 0.5,
     "matcher_low_threshold": 0.3,
     "matcher_allow_low_quality": True,
