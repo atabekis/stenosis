@@ -47,6 +47,9 @@ class FPNRetinaNet(nn.Module):
         fpn_out_channels = config.get("fpn_out_channels", 256)
         pretrained_backbone = config.get("pretrained_backbone", True)
 
+        backbone_use_gn = config.get("backbone_use_gn", True)
+        backbone_num_gn_groups = config.get("backbone_num_gn_groups", 32)
+
         # Classification head specific parameters
         use_custom_classification_head = config.get("custom_head", False)
         classification_head_dropout_p = config.get("classification_head_dropout_p", 0.0)
@@ -65,6 +68,7 @@ class FPNRetinaNet(nn.Module):
         log(f"  Num classes: {num_classes}")
         log(f"  Backbone variant: {backbone_variant}")
         log(f"  Include P2 in FPN: {include_p2_fpn}")
+        log(f"  Backbone GroupNorm: {backbone_use_gn}")
         log(f"  FPN out channels: {fpn_out_channels}")
         log(f"  Anchor sizes: {anchor_sizes}")
         log(f"  Anchor aspect ratios: {anchor_aspect_ratios}")
@@ -74,6 +78,7 @@ class FPNRetinaNet(nn.Module):
         log(f"  Focal Loss gamma: {focal_loss_gamma}")
         log(f"  Pretrained backbone: {pretrained_backbone}")
         log(f"  Detections per image: {detections_per_img}")
+
         log(f"  Use Custom Classification Head: {use_custom_classification_head}")
 
         # 1. backbone & fpn
@@ -82,6 +87,9 @@ class FPNRetinaNet(nn.Module):
             out_channels=fpn_out_channels,
             pretrained=pretrained_backbone,
             include_p2=include_p2_fpn,
+
+            use_groupnorm=backbone_use_gn,
+            num_gn_groups=backbone_num_gn_groups,
         )
 
         # 2. anchor generator

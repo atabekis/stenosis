@@ -7,6 +7,12 @@ import torchvision.models as models
 from torchvision.ops import FeaturePyramidNetwork
 from torchvision.models._utils import IntermediateLayerGetter
 
+from functools import partial
+
+from models.common.params_helper import get_adaptive_groupnorm_layer
+
+from util import log
+
 class FPNBackbone(nn.Module):
     """
     Creates an EfficientNet backbone, with a Feature Pyramid Network (FPN).
@@ -18,7 +24,10 @@ class FPNBackbone(nn.Module):
                  variant: str = "b0",
                  out_channels: int = 256,
                  pretrained: bool = True,
-                 include_p2: bool = False):
+                 include_p2: bool = False,
+                 use_groupnorm: bool = True,
+                 num_gn_groups: int = 32,
+                 ):
         """
         :param variant: EfficientNet variant ('b0', 'v2_s', etc.)
         :param out_channels: Number of channels in the FPN output layers.
@@ -29,73 +38,43 @@ class FPNBackbone(nn.Module):
         self.variant = variant.lower()
         self.include_p2 = include_p2
 
-        base_model = None
+        self.use_groupnorm = use_groupnorm
+        self.num_gn_groups = num_gn_groups
 
-        if self.variant == "b0": # EfficientNet-B0
-            weights = models.EfficientNet_B0_Weights.IMAGENET1K_V1 if pretrained else None
-            effnet = models.efficientnet_b0(weights=weights)
-            base_model = effnet.features
+        if self.use_groupnorm:
+            log(f"Using Group Normalization instead of Batch Normalization. Num GN groups: {self.num_gn_groups}")
+            norm_layer = get_adaptive_groupnorm_layer(default_num_gn_groups=num_gn_groups)
+        else:
+            norm_layer = nn.BatchNorm2d
 
-            # features[2]: out 24ch (effnet stride 4) -> P2
-            # features[3]: out 40ch (effnet stride 8) -> P3
-            # features[5]: out 112ch (effnet stride 16, deeper) -> P4
-            # features[6]: out 192ch (effnet stride 32) -> P5
-
-            if self.include_p2:
-                return_layers_map = {'2': '0', '3': '1', '5': '2', '6': '3'} # P2, P3, P4, P5
-                in_channels_list_map = [24, 40, 112, 192]
-            else:
-                return_layers_map = {'3': '0', '5': '1', '6': '2'} # P3, P4, P5
-                in_channels_list_map = [40, 112, 192]
-
-        elif self.variant == "v2_s":  # EfficientNet V2 Small
-            weights = models.EfficientNet_V2_S_Weights.IMAGENET1K_V1 if pretrained else None
-            effnet = models.efficientnet_v2_s(weights=weights)
-            base_model = effnet.features
-            # features[2]: out 48ch (effnet stride 4, from bneck_conf[1]) -> P2
-            # features[3]: out 64ch (effnet stride 8, from bneck_conf[2]) -> P3
-            # features[5]: out 160ch (effnet stride 16, from bneck_conf[4], deeper) -> P4
-            # features[6]: out 256ch (effnet stride 32, from bneck_conf[5]) -> P5
-
-            if self.include_p2:
-                return_layers_map = {'2': '0', '3': '1', '5': '2', '6': '3'} # P2, P3, P4, P5
-                in_channels_list_map = [48, 64, 160, 256]
-            else:
-                return_layers_map = {'3': '0', '5': '1', '6': '2'} # P3, P4, P5
-                in_channels_list_map = [64, 160, 256]
-
-        elif self.variant == "resnet18":  # may 29 update, experimenting with resnet vairants for overfitting
-            weights = models.ResNet18_Weights.IMAGENET1K_V1 if pretrained else None
-            resnet = models.resnet18(weights=weights)
-            base_model = resnet
-
-            if self.include_p2: # P2, P3, P4, P5
-                return_layers_map = {'layer1': '0', 'layer2': '1', 'layer3': '2', 'layer4': '3'}
-                in_channels_list_map = [64, 128, 256, 512]
-            else: # P3, P4, P5
-                return_layers_map = {'layer2': '0', 'layer3': '1', 'layer4': '2'}
-                in_channels_list_map = [128, 256, 512]
+        weights = models.EfficientNet_B0_Weights.IMAGENET1K_V1 if pretrained else None
 
 
-        elif self.variant == "resnet34":
-            weights = models.ResNet34_Weights.IMAGENET1K_V1 if pretrained else None
-            resnet = models.resnet34(weights=weights)
-            base_model = resnet
+        if self.use_groupnorm and pretrained:
+            effnet = models.efficientnet_b0(weights=None, norm_layer=norm_layer)
 
-            if self.include_p2:  # P2, P3, P4, P5
-                return_layers_map = {'layer1': '0', 'layer2': '1', 'layer3': '2', 'layer4': '3'}
-                in_channels_list_map = [64, 128, 256, 512]
-            else:  # P3, P4, P5
-                return_layers_map = {'layer2': '0', 'layer3': '1', 'layer4': '2'}
-                in_channels_list_map = [128, 256, 512]
+            state_dict_to_load = weights.get_state_dict(progress=True, check_hash=True)
+            missing_keys, unexpected_keys = effnet.load_state_dict(state_dict_to_load, strict=False)
+
+            if missing_keys: log(f"GN Load: Missing keys (expected for BN stats): {missing_keys[:5]}...")
+            # if unexpected_keys: log(f"GN Load: Unexpected keys: {unexpected_keys[:5]}...")
+
 
         else:
-            raise ValueError(f"Unsupported EfficientNet variant: {variant}")
+            effnet = models.efficientnet_b0(weights=weights, norm_layer=norm_layer)  # use regular batchnorm
 
-        # backbone feature extractor
+
+        base_model = effnet.features
+
+        if self.include_p2:
+            return_layers_map = {'2': '0', '3': '1', '5': '2', '6': '3'}
+            in_channels_list_map = [24, 40, 112, 192]
+        else:
+            return_layers_map = {'3': '0', '5': '1', '6': '2'}
+            in_channels_list_map = [40, 112, 192]
+
         self.body = IntermediateLayerGetter(base_model, return_layers=return_layers_map)
 
-        # fpn
         self.fpn = FeaturePyramidNetwork(
             in_channels_list=in_channels_list_map,
             out_channels=out_channels,

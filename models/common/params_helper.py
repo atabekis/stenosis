@@ -1,6 +1,8 @@
 # params_helper.py
 
 import torch
+import torch.nn as nn
+
 from util import log
 
 def get_optimizer_param_groups(model, config):
@@ -36,7 +38,7 @@ def get_optimizer_param_groups(model, config):
     if hasattr(model, 'retinanet') and hasattr(model.retinanet, 'head'):  # FPNRetinaNet
         head_prefix = "retinanet.head."
         log(f"Determined head_prefix: {head_prefix}")
-    elif hasattr(model, 'head'):  # TSMRetinaNet, THANOSDetector
+    elif hasattr(model, 'head'):  # TSMRetinaNet, THANOS
         head_prefix = "head."
         log(f"Determined head_prefix: {head_prefix}")
     else:
@@ -54,7 +56,7 @@ def get_optimizer_param_groups(model, config):
         assigned_to_group = False  # check if param was assigned
 
         # THANOS-specific layers first
-        if model_name == "THANOSDetector":
+        if model_name == "THANOS":
             if name.startswith("positional_embeddings.") or \
                     name.startswith("temporal_attention_blocks."):
                 param_groups["transformer_thanos"]["params"].append(param)
@@ -157,3 +159,39 @@ def get_state_dict_from_ckpt(ckpt_path: str, model_key_prefix: str = 'model.') -
 
     log(f"Extracted {len(filtered)} entries with prefix '{model_key_prefix}' from {ckpt_path}.")
     return filtered
+
+
+
+def get_adaptive_groupnorm_layer(default_num_gn_groups: int):
+    """
+    Returns a callable that creates a nn.GroupNorm layer with an adaptive number of groups
+    """
+
+    # common group numbers,
+    _PREDEFINED_GROUP_OPTIONS = (32, 16, 8, 4, 2, 1)
+
+    def _adaptive_group_norm_inner(num_channels: int):
+        if num_channels <= 0:
+            raise ValueError(f"Cannot apply GroupNorm to {num_channels} channels.")
+
+        # if value is a divisor, use it
+        if num_channels >= default_num_gn_groups > 0 == num_channels % default_num_gn_groups:
+            groups = default_num_gn_groups
+        else:
+            # find the first largest option that divides num_channels.
+            for g in _PREDEFINED_GROUP_OPTIONS:
+                if g <= num_channels and num_channels % g == 0:
+                    groups = g
+                    break
+            else:
+                # fallback should only happen if num_channels < 1, but we guard above.
+                groups = 1
+                log(f"For {num_channels} channels, no predefined group option was suitable. Defaulting to 1 group.")
+
+            # if we fell back to something other than the preferred, log it.
+            if groups != default_num_gn_groups:
+                log(f"For {num_channels} channels, using {groups} groups (default {default_num_gn_groups} was not suitable).", verbose=False)
+
+        return nn.GroupNorm(num_groups=groups, num_channels=num_channels)
+
+    return _adaptive_group_norm_inner
