@@ -5,73 +5,199 @@ import cv2
 import imageio
 import matplotlib.pyplot as plt
 
-from config import CADICA_DATASET_DIR, DANILOV_DATASET_DIR
+# Torch - helper
+import torch
+from torchvision.ops import box_iou
+
+
 # Local imports
 from methods.reader import XCAImage, Reader
+from config import CADICA_DATASET_DIR, DANILOV_DATASET_DIR, IOU_THRESH_METRIC, PROJECT_ROOT
 
 
-def overlay_bbox(image: XCAImage, bboxes: list, color=(0, 255, 0), thickness=1):
+def get_tp_fp(
+    pred_boxes: torch.Tensor, pred_scores: torch.Tensor, pred_labels: torch.Tensor,
+    target_boxes: torch.Tensor, target_labels: torch.Tensor,
+    iou_threshold: float
+) -> list[str]:
     """
-    Overlay bounding boxes on the image.
+    Determine TP/FP status for each predicted box:
+    - A prediction is a TP if its IoU with an unmatched GT box of the same class ≥ iou_threshold.
+    - Each GT can be matched at most once by the highest‐scoring prediction.
     """
-    img = image.copy()
+    num_preds = pred_boxes.size(0)
+    num_targets = target_boxes.size(0)
 
-    if bboxes and isinstance(bboxes[0], (list, tuple)): # Danilov format
-        for box in bboxes:
-            xmin, ymin, xmax, ymax = box
-            cv2.rectangle(img, (xmin, ymin), (xmax, ymax), color, thickness)
-        return img
+    if num_preds == 0:
+        return []
 
-    else: # CADICA format
-        xmin, ymin, xmax, ymax = bboxes
-        cv2.rectangle(img, (xmin, ymin), (xmax, ymax), color, thickness)
-        return img
+    device = pred_boxes.device
+    target_boxes = target_boxes.to(device)
+    target_labels = target_labels.to(device)
+
+    if num_targets == 0:
+        return ["FP"] * num_preds
+
+    # initialize all as fp, record which gt are already matched.
+    tp_fp = ["FP"] * num_preds
+    matched_gt = torch.zeros(num_targets, dtype=torch.bool, device=device)
+
+    # get iou matrix
+    iou_matrix = box_iou(pred_boxes, target_boxes)
 
 
+    for pred_idx in torch.argsort(pred_scores, descending=True): # process preds in desc. score order
+        label = pred_labels[pred_idx]
+        label_mask = (target_labels == label) & ~matched_gt # mask iouss to only consider same label, unmatched gts
+        if not label_mask.any():
+            continue
 
-def show_xca_image(xca_image: XCAImage, overlay: bool = True, figsize=(6, 6)):
+        # get ious for pred and select best candidate
+        ious = iou_matrix[pred_idx]
+        masked_ious = ious.masked_fill(~label_mask, -1.0)
+        best_iou, best_gt_idx = masked_ious.max(dim=0)
+
+        if best_iou >= iou_threshold:
+            tp_fp[pred_idx.item()] = "TP"
+            matched_gt[best_gt_idx] = True
+    return tp_fp
+
+
+def visualize_predictions(xca_image, result_entry: dict, iou_threshold: float = IOU_THRESH_METRIC,
+                          figsize=(12, 12), ax=None, return_ax: bool = False):
     """
-    Display an XCAImage instance
+    Overlay ground‐truth (GT) and predicted boxes on the image:
     """
-    image = xca_image.image
+    img = xca_image.image.copy()
+    meta = result_entry["metadata"]
 
-    image = overlay_bbox(image, xca_image.bbox) if overlay else image
+    if img.ndim == 2:  # images coming in from reader are 1-ch, we need to create mock bgr
+        img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
 
-    image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    # get gt data
+    gt_boxes, gt_labels = [], []
 
-    plt.figure(figsize=figsize)
-    plt.imshow(image_rgb)
-    plt.title(f"Patient={xca_image.patient_id}, Video={xca_image.video_id}, Frame={xca_image.frame_nr}")
-    plt.axis('off')
-    plt.show()
+    for tgt in result_entry.get("targets", []):
+        boxes, labels = tgt.get("boxes"), tgt.get("labels")
+
+        if boxes is not None and boxes.numel() > 0:
+            gt_boxes.append(boxes); gt_labels.append(labels)
 
 
-def image_to_gif(xca_images, output_path="output.gif", overlay=True, fps=1):
-    """Construct GIF from a list of XCAImage instances."""
-    frames = []
-    for xca_image in xca_images:
-        image = xca_image.image
-        image = overlay_bbox(image, xca_image.bbox) if overlay else image
+    if gt_boxes:
+        device_tgt = gt_boxes[0].device
+        gt_boxes = torch.cat([b.to(device_tgt) for b in gt_boxes], dim=0)
+        gt_labels = torch.cat([l.to(device_tgt) for l in gt_labels], dim=0)
+    else:
+        device_tgt = torch.device("cpu")
+        gt_boxes = torch.empty((0, 4), device=device_tgt)
+        gt_labels = torch.empty((0,), dtype=torch.long, device=device_tgt)
 
-        text = f"Patient: {xca_image.patient_id}, Video: {xca_image.video_id}, Frame: {xca_image.frame_nr}"
-        font = cv2.FONT_HERSHEY_COMPLEX_SMALL
-        font_scale = 0.5
-        thickness = 1
-        text_size, baseline = cv2.getTextSize(text, font, font_scale, thickness)
-        text_x = 10
-        text_y = image.shape[0] - 10
-        cv2.rectangle(image, (text_x, text_y - text_size[1] - baseline),
-                      (text_x + text_size[0], text_y + baseline), (0, 0, 0), cv2.FILLED)
-        cv2.putText(image, text, (text_x, text_y), font, font_scale, (255, 255, 255), thickness, cv2.LINE_AA)
+    # get pred data
+    pred_boxes, pred_scores, pred_labels = [], [], []
+    for pred in result_entry.get("predictions", []):
+        boxes, scores, labels = pred.get("boxes"), pred.get("scores"), pred.get("labels")
 
-        image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        frames.append(image_rgb)
+        if boxes is not None and boxes.numel() > 0:
+            pred_boxes.append(boxes); pred_scores.append(scores); pred_labels.append(labels)
 
-    imageio.mimsave(output_path, frames, fps=fps)
-    return output_path
+    if pred_boxes:
+        device_pred = pred_boxes[0].device
+        pred_boxes = torch.cat([b.to(device_pred) for b in pred_boxes], dim=0)
+        pred_scores = torch.cat([s.to(device_pred) for s in pred_scores], dim=0)
+        pred_labels = torch.cat([l.to(device_pred) for l in pred_labels], dim=0)
+    else:
+        device_pred = torch.device("cpu")
+        pred_boxes = torch.empty((0, 4), device=device_pred)
+        pred_scores = torch.empty((0,), device=device_pred)
+        pred_labels = torch.empty((0,), dtype=torch.long, device=device_pred)
+
+    # compute tp/fp for preds
+    tp_fp_status =  get_tp_fp(
+        pred_boxes, pred_scores, pred_labels,
+        gt_boxes, gt_labels, iou_threshold
+    )
+
+    # settings for drawing
+    COLORS = {
+        "GT": (255, 0, 0), # blue
+        "TP": (0, 255, 0), # green
+        "FP": (0, 0, 255), # red
+        "META": (255, 255, 255), # white
+    }
+    THICKNESS = {"GT": 2, "PRED": 1}
+    FONT = cv2.FONT_HERSHEY_SIMPLEX
+    FS_BOX = 0.45
+    FT_BOX = 1
+    FS_META = 0.8
+    FT_META = 2
+
+    #  draw gt boxes
+    for box in gt_boxes.cpu().int().numpy():
+        x1, y1, x2, y2 = box
+        cv2.rectangle(img, (x1, y1), (x2, y2), COLORS["GT"], THICKNESS["GT"])
+        text = "GT"
+        (tw, th), baseline = cv2.getTextSize(text, FONT, FS_BOX, FT_BOX)
+        text_x = x1
+        text_y = y1 - 6  # 6 px above top edge
+
+        # if text would go off-image, place inside
+        if text_y < th + baseline:
+            text_y = y1 + th + baseline + 2
+        cv2.putText(img, text, (text_x, text_y), FONT, FS_BOX, COLORS["GT"], FT_BOX, cv2.LINE_AA)
+
+    # draw pred boxes
+    for i in range(pred_boxes.size(0)):
+        box = pred_boxes[i].cpu().int().numpy()
+        x1, y1, x2, y2 = box
+        score = pred_scores[i].item()
+        status = tp_fp_status[i]
+
+        cv2.rectangle(img, (x1, y1), (x2, y2), COLORS[status], THICKNESS["PRED"])
+
+        # score text
+        text = f"{score:.2f}"
+        (tw, th), baseline = cv2.getTextSize(text, FONT, FS_BOX, FT_BOX)
+
+        text_x = x1
+        text_y = y2 + th + baseline + 2  # 2 px below the bottom edge
+
+        cv2.putText(img, text, (text_x, text_y), FONT, FS_BOX, COLORS[status], FT_BOX, cv2.LINE_AA)
+
+    # draw meta
+    pid = meta.get("patient_id", "N/A")
+    vid = meta.get("video_id", "N/A")
+    fn = meta.get("frame_nr", "N/A")
+    meta_text = f"Patient: {pid}, Video: {vid}, Frame: {fn}"
+    cv2.putText(img, meta_text, (10, 30), FONT, FS_META, COLORS["META"], FT_META, cv2.LINE_AA)
+
+    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB) # mock rgb
+
+    if ax is None:
+        fig, ax_plot = plt.subplots(figsize=figsize)
+    else:
+        ax_plot = ax
+
+    ax_plot.imshow(img_rgb)
+    ax_plot.axis("off")
+
+
+    return ax_plot if return_ax else plt
 
 
 if __name__ == "__main__":
-    r = Reader(dataset_dir=CADICA_DATASET_DIR)
-    ins = r.get(lesion=True)
-    show_xca_image(ins)
+    from torch import tensor
+
+    r = Reader(dataset_dir='both')
+    res = {'metadata': {'patient_id': 39, 'video_id': 4, 'frame_nr': 27},
+ 'targets': [{'boxes': tensor([[240., 202., 267., 226.]]),
+   'labels': tensor([1])}],
+ 'predictions': [{'boxes': tensor([[240.0085, 200.8250, 269.8293, 226.4715]]),
+   'scores': tensor([0.8199]),
+   'labels': tensor([1])}],
+ 'mask': tensor([True])}
+
+    meta = res['metadata']
+    res_img = r.get(patient_id=meta['patient_id'], video_id=meta['video_id'], frame_nr=meta['frame_nr'])
+    yar = visualize_predictions(xca_image=res_img, result_entry=res)
+    yar.show()

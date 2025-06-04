@@ -172,6 +172,8 @@ class DetectionLightningModule(pl.LightningModule):
         self.test_mask_samples = []
 
         self.final_test_metrics = {}
+        self.final_test_results = []
+
 
         if not (isinstance(self.num_log_test_images, int) and self.num_log_test_images >= 0) and self.num_log_test_images != 'all':
             raise ValueError(f'num_log_test_images must be an integer >= 0 or "all", got {self.num_log_test_images}')
@@ -189,7 +191,6 @@ class DetectionLightningModule(pl.LightningModule):
             self,
             images: Union[list[torch.Tensor], torch.Tensor],
             targets: Optional[Union[list[dict[str, torch.Tensor]], list[list[dict[str, torch.Tensor]]]]] = None,
-            masks: Optional[torch.Tensor] = None,  # might be deprecated, will see with transformer
     ) -> Any:
         """
         Forward pass of the model. Input format depends on the model stage
@@ -270,7 +271,7 @@ class DetectionLightningModule(pl.LightningModule):
         original_train_state_pred = self.model.training
         self.model.eval()
         with torch.no_grad():
-            preds = self.forward(images, targets=None, masks=masks)
+            preds = self.forward(images, targets=None)
         self.model.train(original_train_state_pred)
 
 
@@ -361,10 +362,6 @@ class DetectionLightningModule(pl.LightningModule):
             for i in range(int(min((limit - stored), batch_size))):
                 img_store.append(images[i].cpu().detach())
 
-                # # it's better to log the images where GT is present to see performance
-                # print(targets[i])
-                # if not has_positive_gt(targets[i], self.positive_class_id, self.model_stage):  # external method to check
-                #     continue
 
                 if self.model_stage == 1:
                     pred_s_store.append({k: v.cpu().detach() for k, v in preds[i].items()})
@@ -390,6 +387,7 @@ class DetectionLightningModule(pl.LightningModule):
 
                 mask_s_store.append(masks[i].cpu().detach())
 
+
         # 7. val loss logging
         if is_val:
             orig_training_state = self.model.training
@@ -414,6 +412,25 @@ class DetectionLightningModule(pl.LightningModule):
                              on_step=False, on_epoch=True, prog_bar=False,
                              logger=True, sync_dist=True, batch_size=batch_size)
 
+        if is_test:
+            for i in range(batch_size):
+                test_tgt, test_pred, test_mask, test_meta = targets[i], preds[i], masks[i], metadata[i]
+
+                # ensure we have a list of dicts
+                raw_tgts = test_tgt if isinstance(test_tgt, list) else [test_tgt]
+                raw_preds = test_pred if isinstance(test_pred, list) else [test_pred]
+
+                # move to cpu
+                tgts_to_store = [{k: v.cpu().detach() for k, v in frame.items()} for frame in raw_tgts]
+                preds_to_store = [{k: v.cpu().detach() for k, v in frame.items()} for frame in raw_preds]
+                mask_to_store = test_mask.cpu().detach()
+
+                self.final_test_results.append({
+                    "metadata": test_meta,
+                    "targets": tgts_to_store,
+                    "predictions": preds_to_store,
+                    "mask": mask_to_store,
+                })
 
 
     def training_step(self, batch, batch_idx):
