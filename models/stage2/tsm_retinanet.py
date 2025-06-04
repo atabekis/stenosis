@@ -135,6 +135,8 @@ class TSMRetinaNet(nn.Module):
                 num_gn_groups=classification_head_num_gn_groups,
 
                 prior_probability=0.01,
+
+                use_grad_ckpt=use_gradient_checkpointing
             )
 
 
