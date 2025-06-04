@@ -79,17 +79,6 @@ def train_model(
 
     logger = TensorBoardLogger(save_dir=log_dir, name=experiment_name)
 
-    # checkpoint_callback_map = ModelCheckpoint(
-    #     filename=model.__class__.__name__ + '-{epoch:02d}-{val_mAP:.4f}',
-    #     save_top_k=3,
-    #     verbose=True,
-    #     monitor='val_mAP',
-    #     mode='max',
-    #     save_on_train_epoch_end=False,
-    #     every_n_epochs=1,
-    #     save_last=True,
-    # )
-
     checkpoint_callback_val = ModelCheckpoint(
         filename=model.__class__.__name__ + '-{epoch:02d}-{val_loss:.4f}',
         save_top_k=3,
@@ -99,7 +88,17 @@ def train_model(
         save_on_train_epoch_end=False,
         every_n_epochs=1,
         save_last=True,
+    )
 
+    checkpoint_callback_map = ModelCheckpoint(
+        filename=model.__class__.__name__ + '-{epoch:02d}-{val_mAP:.4f}',
+        save_top_k=5,
+        verbose=False,
+        monitor='val_mAP',
+        mode='max',
+        save_on_train_epoch_end=False,
+        every_n_epochs=1,
+        save_last=True,
     )
 
     early_stop_callback = EarlyStopping(
@@ -133,15 +132,18 @@ def train_model(
             profiler = None
 
     accelerator_arg, devices_arg, estimated_num_devices = determine_device_config(gpus)
-    checkpoint_callback = checkpoint_callback_val
 
+    checkpoint_callback = checkpoint_callback_val  # this is where we will go back to test the model from
 
     trainer_kwargs = {
         'max_epochs': max_epochs,
         'gradient_clip_val': gradient_clip_val,
         'callbacks':
-            [checkpoint_callback,
+            [checkpoint_callback_val,
+             checkpoint_callback_map,
+
              early_stop_callback,
+
              test_on_interrupt_callback,
              test_on_remote_trigger,
              ],
