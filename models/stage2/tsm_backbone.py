@@ -4,6 +4,7 @@
 import copy
 import math
 from collections import OrderedDict
+from functools import partial
 from typing import Callable, Optional, Sequence
 
 # Torch imports
@@ -129,7 +130,7 @@ class TSMEfficientNet(nn.Module):
             last_channel: Optional[int] = None,
             time_dim: int = 1,
             shift_fraction: float = 0.0,
-            shift_mode: str = 'inplace',
+            shift_mode: str = 'residual',
             tsm_stages: Optional[list[int]] = None,
             use_gradient_checkpointing: bool = False,
     ) -> None:
@@ -137,6 +138,7 @@ class TSMEfficientNet(nn.Module):
 
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
+
 
         layers = OrderedDict()
 
@@ -228,11 +230,22 @@ def tsm_efficientnet_b0(
         num_classes: int = 1000,
         last_channel: Optional[int] = None,
         verbose: bool = False,
+
+        use_groupnorm: bool = True,
+        num_gn_groups: int = 32,
+
         **kwargs: any
 ) -> TSMEfficientNet:
     """
     Constructs a TSM-EfficientNet-B0 model.
     """
+
+    if use_groupnorm:
+        log(f'Using GroupNorm, number of groups for GN: {num_gn_groups}')
+        curr_norm_layer = partial(nn.GroupNorm, num_gn_groups)
+    else:
+        curr_norm_layer = nn.BatchNorm2d
+
     tsm_stages_internal = None
     if tsm_stages_indices:
         # expected to be like [3,5,6] referring to the output stages
@@ -250,7 +263,9 @@ def tsm_efficientnet_b0(
         tsm_stages=tsm_stages_internal,
         use_gradient_checkpointing=use_gradient_checkpoint,
         num_classes=num_classes,
-        last_channel=last_channel
+        last_channel=last_channel,
+
+        norm_layer=curr_norm_layer,
     )
 
     if pretrained:
