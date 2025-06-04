@@ -47,9 +47,6 @@ class TSMRetinaNet(nn.Module):
 
         include_p2_fpn = config.get("include_p2_fpn", False)
 
-        backbone_use_gn = config.get("backbone_use_gn", True)
-        backbone_num_gn_groups = config.get("backbone_num_gn_groups", 32)
-
         self.t_clip = config["t_clip"]
         shift_fraction = config.get("tsm_shift_fraction", 0.125)
         shift_mode = config.get("tsm_shift_mode", 'residual')
@@ -77,7 +74,6 @@ class TSMRetinaNet(nn.Module):
         log(f"  Num classes: {self.num_classes}")
         log(f"  FPN out channels: {fpn_out_channels}")
         log(f"  Include P2 in FPN: {include_p2_fpn}")
-        log(f"  Backbone GroupNorm: {backbone_use_gn}")
         log(f"  Anchor sizes: {anchor_sizes}")
         log(f"  Anchor aspect ratios: {anchor_aspect_ratios}")
         log(f"  Score threshold: {self.score_thresh}")
@@ -99,10 +95,7 @@ class TSMRetinaNet(nn.Module):
             tsm_stages_indices=tsm_effnet_stages,
             num_classes=self.num_classes,
             use_gradient_checkpoint=use_gradient_checkpointing,
-
-            use_groupnorm=backbone_use_gn,
-            num_gn_groups=backbone_num_gn_groups,
-    )
+        )
 
         if include_p2_fpn:
             return_layers = {'stage2': '0', 'stage3': '1', 'stage5': '2', 'stage6': '3'} # p2, p3, p4, p5

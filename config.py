@@ -20,11 +20,12 @@ CHECKPOINTS_DIR = PROJECT_ROOT / '.checkpoints'
 
 # BACKBONE_MODEL_WEIGHTS = "logs/FPNRetinaNet/augmented/version_1/checkpoints/last.ckpt" # using pretrained model checkpoint
 # BACKBONE_MODEL_WEIGHTS = ".checkpoints/ep5.ckpt" # using pretrained model checkpoint
+# BACKBONE_MODEL_WEIGHTS = ".checkpoints/ep8.ckpt" # using pretrained model checkpoint
 BACKBONE_MODEL_WEIGHTS = None
 
 # ------------- CONTROLS --------------- #
-DEBUG = True
-DEBUG_SIZE = 0.1  # keep % (DEBUG_SIZE * 100) of data
+DEBUG = False
+DEBUG_SIZE = 0.2  # keep % (DEBUG_SIZE * 100) of data
 
 CADICA_NEGATIVE_ONLY_ON_BOTH = True  # when loading both datasets, this will load only the negative frames from CADICA
 
@@ -75,7 +76,7 @@ FOCAL_LOSS_GAMMA = 2.0
 DETECTIONS_PER_IMG_AFTER_NMS = 3  # give the model some flexibility
 
 INFERENCE_SCORE_THRESH = 0.35  # passed onto score_threshold in RetinaNet
-INFERENCE_NMS_THRESH = 0.5   # passed onto nms_thresh in RetinaNet
+INFERENCE_NMS_THRESH = 0.4   # passed onto nms_thresh in RetinaNet
 PRF1_THRESH = INFERENCE_SCORE_THRESH  # used in calculating the Precision Recall, F1 scores at a threshold
 IOU_THRESH_METRIC = 0.5  # used in metric calculation, IoU@0.5
 
@@ -109,7 +110,7 @@ OPTIMIZER_CONFIG = {
         "lr_fpn": 3e-5,
         "lr_transformer_thanos": 5e-5,
         "lr_regression_head": 5e-5,
-        "lr_classification_head": 3e-5,
+        "lr_classification_head": 5e-5,
         "lr_other": 1e-5
     }
 }
@@ -149,8 +150,6 @@ COMMON_BACKBONE_FPN_CONFIG = {
     "pretrained_backbone": True,
     "load_weights_from_ckpt": BACKBONE_MODEL_WEIGHTS,
     "ckpt_model_key_prefix": "model.",
-    "backbone_use_gn": False,
-    "backbone_num_gn_groups": 32,
 }
 
 
