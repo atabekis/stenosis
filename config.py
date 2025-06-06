@@ -2,10 +2,8 @@
 import numpy as np
 from pathlib import Path
 
-from util import get_anchor_config
-
 # ------------ RANDOM SEED -------------- #
-SEED = 55
+SEED = 5
 
 # --------------- PATHS ----------------- #
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -16,16 +14,14 @@ DANILOV_DATASET_PATH = DANILOV_DATASET_DIR / "dataset"
 
 LOGS_DIR = PROJECT_ROOT / "logs"
 
-CHECKPOINTS_DIR = PROJECT_ROOT / '.checkpoints'
+CHECKPOINTS_DIR = PROJECT_ROOT / 'checkpoints'
 
-# BACKBONE_MODEL_WEIGHTS = "logs/FPNRetinaNet/augmented/version_1/checkpoints/last.ckpt" # using pretrained model checkpoint
-# BACKBONE_MODEL_WEIGHTS = ".checkpoints/ep5.ckpt" # using pretrained model checkpoint
-# BACKBONE_MODEL_WEIGHTS = ".checkpoints/ep8.ckpt" # using pretrained model checkpoint
-BACKBONE_MODEL_WEIGHTS = None
+BACKBONE_MODEL_WEIGHTS = ".checkpoints/ep5.ckpt" # using pretrained model checkpoint
+# BACKBONE_MODEL_WEIGHTS = None
 
 # ------------- CONTROLS --------------- #
 DEBUG = False
-DEBUG_SIZE = 0.2  # keep % (DEBUG_SIZE * 100) of data
+DEBUG_SIZE = 0.1  # keep % (DEBUG_SIZE * 100) of data
 
 CADICA_NEGATIVE_ONLY_ON_BOTH = True  # when loading both datasets, this will load only the negative frames from CADICA
 
@@ -90,15 +86,8 @@ FPN_OUT_CHANNELS = 256
 DEFAULT_ANCHOR_SIZES =  ((16.0, 20.16, 25.4), (32.0, 40.32, 50.8), (64.0, 80.63, 101.59), (128.0, 161.27, 203.19))
 DEFAULT_ANCHOR_ASPECT_RATIOS = ((0.5, 1.0, 2.0), (0.5, 1.0, 2.0), (0.5, 1.0, 2.0), (0.5, 1.0, 2.0))
 
-# DEFAULT_ANCHOR_SIZES, DEFAULT_ANCHOR_ASPECT_RATIOS = get_anchor_config(  # get auto-scaled anchor sizes based on:
-#     current_img_width=DEFAULT_WIDTH,  # image sizes
-#     current_img_height=DEFAULT_HEIGHT,
-#     include_p2_fpn=INCLUDE_P2_FPN, # whether to include extra P2 FPN layer
-# )
-
 
 # -------- SHARED BASE CONFIG -------- #
-
 
 OPTIMIZER_CONFIG = {
     'name': 'Adamw',
@@ -114,34 +103,7 @@ OPTIMIZER_CONFIG = {
         "lr_other": 1e-5
     }
 }
-# OPTIMIZER_CONFIG = {
-#     'name': 'Adamw',
-#     'base_lr': 1e-4,
-#     'weight_decay': 1e-4,
-#     "differential_lr": {
-#         "enabled": True,  # false to use base_lr for all params
-#         "lr_backbone": 1e-6,
-#         "lr_fpn": 5e-6,
-#         "lr_transformer_thanos": 1e-6,
-#         "lr_regression_head": 1e-5,
-#         "lr_classification_head": 1e-5,
-#         "lr_other": 1e-6
-#     }
-# }
-# OPTIMIZER_CONFIG = {  # thanos
-#     'name': 'Adamw',
-#     'base_lr': 3e-5,
-#     'weight_decay': 1e-4,
-#     "differential_lr": {
-#         "enabled": True,  # false to use base_lr for all params
-#         "lr_backbone": 2e-5,
-#         "lr_fpn": 2e-5,
-#         "lr_transformer_thanos": 4e-5,
-#         "lr_regression_head": 4e-5,
-#         "lr_classification_head": 4e-5,
-#         "lr_other": 1e-5
-#     }
-# }
+
 
 COMMON_BACKBONE_FPN_CONFIG = {
     "backbone_variant": DEFAULT_BACKBONE_VARIANT,
@@ -150,6 +112,7 @@ COMMON_BACKBONE_FPN_CONFIG = {
     "pretrained_backbone": True,
     "load_weights_from_ckpt": BACKBONE_MODEL_WEIGHTS,
     "ckpt_model_key_prefix": "model.",
+    "freeze_bn_in_backbone": True,  # if backbone model weights are given, this will freeze the BatchNorm layers.
 }
 
 
@@ -214,7 +177,8 @@ STAGE3_THANOS_DEFAULT_CONFIG = {
     "transformer_num_spatial_layers": 2,
     "transformer_num_temporal_layers": 2,
     "transformer_dropout_rate": 0.1,
-    "fpn_levels_to_process_temporally": ["P3", "P4", "P5"],
+    "fpn_levels_to_process_temporally": ["P3", "P5"],
     "max_spatial_tokens_pe": (DEFAULT_HEIGHT // 8) * (DEFAULT_WIDTH // 8),
     "max_temporal_tokens_pe": T_CLIP,
+    **CUSTOM_CLS_HEAD_CONFIG
 }

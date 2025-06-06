@@ -7,8 +7,6 @@ import torchvision.models as models
 from torchvision.ops import FeaturePyramidNetwork
 from torchvision.models._utils import IntermediateLayerGetter
 
-from functools import partial
-
 from models.common.params_helper import get_adaptive_groupnorm_layer
 
 from util import log
@@ -91,4 +89,3 @@ class FPNBackbone(nn.Module):
         x_body = self.body(x)
         x_fpn = self.fpn(x_body)
         return x_fpn
-

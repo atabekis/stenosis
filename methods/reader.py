@@ -28,7 +28,7 @@ class Reader:
     """
     def __init__(
             self,
-            dataset_dir=None,
+            dataset_dir,
             debug=DEBUG,
             cadica_negative_only=CADICA_NEGATIVE_ONLY_ON_BOTH,
             iou_split_thresh = 0.01,

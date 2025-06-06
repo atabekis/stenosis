@@ -85,8 +85,8 @@ class DetectionLightningModule(pl.LightningModule):
             # image logging/vis
             normalize_params: Optional[dict] = None,
             num_log_val_images: int = 1,  # how many images will be shown in the board (per epoch)
-            num_log_test_images: Union[int, str] = 'all',
-
+            num_log_test_images: Union[int, str] = 100, # this can be set to "all" or int value. Setting to "all"
+                                                        # will result in a (very) long wait time after test epoch
             # hparam logging/tuning
             hparams_to_log: Optional[dict] = None,
             hparam_primary_metric: str = 'F1_0.5',
