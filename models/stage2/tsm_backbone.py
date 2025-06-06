@@ -7,8 +7,8 @@ from collections import OrderedDict
 from typing import Callable, Optional, Sequence
 
 # Torch imports
-import torch
 from torch import nn, Tensor
+from torch.nn.modules.module import T
 from torch.utils.checkpoint import checkpoint
 from torchvision.ops.stochastic_depth import StochasticDepth
 from torchvision.ops.misc import Conv2dNormActivation, SqueezeExcitation
@@ -132,11 +132,16 @@ class TSMEfficientNet(nn.Module):
             shift_mode: str = 'inplace',
             tsm_stages: Optional[list[int]] = None,
             use_gradient_checkpointing: bool = False,
+            freeze_bn: bool = False  # this flag is used to override the model.train()
     ) -> None:
         super().__init__()
 
+        self.freeze_bn = freeze_bn
+
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
+
+        self.norm_layer_type = norm_layer
 
         layers = OrderedDict()
 
@@ -210,12 +215,34 @@ class TSMEfficientNet(nn.Module):
                 nn.init.uniform_(m.weight, -init_range, init_range)
                 nn.init.zeros_(m.bias)
 
+        if self.freeze_bn and self.norm_layer_type == nn.BatchNorm2d:
+            self.freeze_backbone_layers()
+
     def _forward_impl(self, x: Tensor) -> Tensor:
         x = self.features(x)
         return x  # features before avgpool and classifier for backbone
 
     def forward(self, x: Tensor) -> Tensor:
         return self._forward_impl(x)
+
+    def freeze_backbone_layers(self):
+        """
+        Sets all BatchNorm layers in the model to eval mode. Their affine params (gamma, beta) will still be trainable.
+        """
+        if self.norm_layer_type == nn.BatchNorm2d:
+            for module_name, module in self.named_modules():
+                if isinstance(module, nn.BatchNorm2d):
+                    module.eval()
+
+    def train(self: T, mode: bool = True) -> T:
+        """Override the default train mode to freeze the BatchNorm layers actively during training."""
+        super().train(mode)
+
+        if mode and self.freeze_bn and self.norm_layer_type == nn.BatchNorm2d:
+            for module_name, module in self.named_modules():
+                if isinstance(module, nn.BatchNorm2d):
+                    module.eval()
+        return self
 
 
 def tsm_efficientnet_b0(
@@ -228,6 +255,7 @@ def tsm_efficientnet_b0(
         num_classes: int = 1000,
         last_channel: Optional[int] = None,
         verbose: bool = False,
+        freeze_bn: bool = False,
         **kwargs: any
 ) -> TSMEfficientNet:
     """
@@ -250,7 +278,9 @@ def tsm_efficientnet_b0(
         tsm_stages=tsm_stages_internal,
         use_gradient_checkpointing=use_gradient_checkpoint,
         num_classes=num_classes,
-        last_channel=last_channel
+        last_channel=last_channel,
+
+        freeze_bn=freeze_bn
     )
 
     if pretrained:
