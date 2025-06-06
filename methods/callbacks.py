@@ -82,30 +82,37 @@ class RemoteTestTriggerCallback(pl.Callback):
         hostname = socket.gethostname()
         try:
             ip_addr = socket.gethostbyname(hostname)
-        except socket.error:
-            ip_addr = 'unresolved'
-
+        except socket.gaierror:
+            ip_addr = "unresolved"
 
         self._trigger.clear()
 
-        port = self.port
-        while True:  # if port is already in use, this will try incrementing ports instead of terminating program
+        for port in range(self.port, self.port + 100):
             try:
-                self._server = socketserver.ThreadingTCPServer(  # have to ssh into local
-                    ('0.0.0.0', self.port),
-                    type(self)._Handler
+                self._server = socketserver.ThreadingTCPServer(
+                    ("0.0.0.0", port),
+                    type(self)._Handler,
                 )
                 self.port = port
                 break
-            except OSError:
-                port += 1
+            except OSError as exc:
+                if exc.errno != 98:  # not 'address in use' - give up
+                    # log(f"Unexpected OSError binding port {port}: {exc}")  # too verbose
+                    return
+                # log(f"Port {port} is busy, trying {port + 1}")  # too verbose
+        else:  # loop exhausted → no port found
+            log(f"Unable to bind any port in {self.port}-{self.port + 99}.")
+            return
 
-        log(f'Compute node hostname: {hostname}, IP address: {ip_addr}. Listening on port {self.port} for "{self.command}"')
+        log(f"Compute node {hostname} ({ip_addr}) listening on {self.port} for '{self.command}'")
 
         self._server.callback = self
         self._server.daemon_threads = True
-        self._server.allow_reuse_address = True
-        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+
+        self._thread = threading.Thread(
+            target=self._server.serve_forever,
+            daemon=True,
+        )
         self._thread.start()
 
     def on_train_batch_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule, outputs, batch, batch_idx: int) -> None:
