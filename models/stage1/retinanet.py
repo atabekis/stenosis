@@ -47,7 +47,7 @@ class FPNRetinaNet(nn.Module):
         fpn_out_channels = config.get("fpn_out_channels", 256)
         pretrained_backbone = config.get("pretrained_backbone", True)
 
-        backbone_use_gn = config.get("backbone_use_gn", True)
+        backbone_use_gn = config.get("backbone_use_gn", False)
         backbone_num_gn_groups = config.get("backbone_num_gn_groups", 32)
 
         # Classification head specific parameters
@@ -83,7 +83,7 @@ class FPNRetinaNet(nn.Module):
 
         # 1. backbone & fpn
         self.backbone = BackboneV2(
-            variant=backbone_variant,
+            variant=backbone_variant,  # Deprecated, default to B0
             out_channels=fpn_out_channels,
             pretrained=pretrained_backbone,
             include_p2=include_p2_fpn,
@@ -139,8 +139,8 @@ class FPNRetinaNet(nn.Module):
             if model_weights:
                 missing, unexpected = self.load_state_dict(model_weights, strict=False)
 
-                if missing: log(f"Warning: Missing keys (first 5): {missing[:5]}")
-                if unexpected: log(f"Warning: Unexpected keys (first 5): {unexpected[:5]}")
+                # if missing: log(f"Warning: Missing keys (first 5): {missing[:5]}")
+                # if unexpected: log(f"Warning: Unexpected keys (first 5): {unexpected[:5]}")
 
                 log(f"{'Successfully' if not (missing or unexpected) else 'Partially'} loaded weights from checkpoint.")
 
@@ -158,4 +158,3 @@ class FPNRetinaNet(nn.Module):
         if isinstance(images, list):
             images = torch.stack(images, dim=0)
         return self.retinanet(images, targets)
-
