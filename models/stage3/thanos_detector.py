@@ -3,7 +3,7 @@
 # Torch imports
 import torch
 import torch.nn as nn
-from torchvision.ops import box_iou, nms, clip_boxes_to_image
+from torchvision.ops import box_iou
 from torchvision.models.detection.image_list import ImageList
 from torchvision.models.detection.retinanet import RetinaNetHead  # For the head structure
 from torchvision.models.detection._utils import Matcher, BoxCoder  # For loss calculation
@@ -13,15 +13,21 @@ from torchvision.models.detection.anchor_utils import AnchorGenerator
 from typing import Optional, Union
 
 # Local imports - models
-from models.stage1.backbone import EfficientNetFPNBackbone
+# from models.stage1.backbone import EfficientNetFPNBackbone
+from models.stage1.backbone_v2 import FPNBackbone
 from models.stage3.thanos_utils import LearnablePositionalEmbeddings
 from models.stage3.thanos_transformer import SpatioTemporalAttentionBlock
+
+from models.common.postprocess import postprocess_detections
+from models.common.retinanet_utils import GNDropoutRetinaNetClassificationHead
+from models.common.params_helper import thanos_load_weights
+
 
 # Logging
 from util import log
 
 
-class THANOSDetector(nn.Module):
+class THANOS(nn.Module):
     """
     Temporal Hybrid Attentive Network for Stenosis (THANOS).
     Combines a CNN-FPN backbone with a SpatioTemporalAttentionBlock to enhance
@@ -33,6 +39,9 @@ class THANOSDetector(nn.Module):
 
         self.fpn_out_channels = config.get("fpn_out_channels", 256)
         pretrained_backbone = config.get("pretrained_backbone", True)
+
+        include_p2_fpn = config.get("include_p2_fpn", False)
+
 
         self.num_classes = config.get("num_classes")
 
@@ -61,9 +70,27 @@ class THANOSDetector(nn.Module):
         self.inference_nms_thresh = config.get("inference_nms_thresh", 0.4)
         self.inference_detections_per_img = config.get("inference_detections_per_img")
 
-        log("Initializing THANOSDetector with parameters:")
+        load_weights_ckpt_path = config.get("load_weights_from_ckpt", None)
+        ckpt_model_key_prefix = config.get("ckpt_model_key_prefix", 'model.')
+
+        backbone_use_gn = config.get("backbone_use_gn", False)
+        backbone_num_gn_groups = config.get("backbone_num_gn_groups", 32)
+
+        # Classification head specific parameters
+        use_custom_classification_head = config.get("custom_head", False)
+        classification_head_dropout_p = config.get("classification_head_dropout_p", 0.0)
+        classification_head_num_convs = config.get("classification_head_num_convs", 4)
+        classification_head_use_groupnorm = config.get("classification_head_use_groupnorm", False)
+        classification_head_num_gn_groups = config.get("classification_head_num_gn_groups", 32)
+
+        if load_weights_ckpt_path:  # disable imagenet weights if we give a checkpoint
+            pretrained_backbone = False
+
+        log("Initializing THANOS with parameters:")
         log(f"  Num classes: {self.num_classes}")
         log(f"  FPN out channels: {self.fpn_out_channels}")
+        log(f"  Include P2 in FPN: {include_p2_fpn}")
+        log(f"  Backbone GroupNorm: {backbone_use_gn}")
         log(f"  Anchor sizes: {anchor_sizes}")
         log(f"  Anchor aspect ratios: {anchor_aspect_ratios}")
         log(f"  Score threshold: {self.inference_score_thresh}")
@@ -77,14 +104,28 @@ class THANOSDetector(nn.Module):
         log(f"  FPN Levels for Temporal Processing: {self.fpn_levels_to_process_temporally}")
         log(f"  PE Max Tokens: Spatial={max_spatial_tokens_pe}, Temporal={max_temporal_tokens_pe}")
 
+        log(f"  Use Custom Classification Head: {use_custom_classification_head}")
+
+
+
         # set up the stage-1 backbone and FPN layers
-        self.backbone = EfficientNetFPNBackbone(out_channels=self.fpn_out_channels, pretrained=pretrained_backbone)
-        self.fpn_level_map = {'0': 'P3', '1': 'P4', '2': 'P5'}
-        # going to check:  '3': 'P6', 'pool': 'P7' if your FPN or head uses them, but backbone currently only provides P3, P4, P5 outputs via keys '0','1','2'.
+        self.backbone = FPNBackbone(
+            out_channels=self.fpn_out_channels,
+            pretrained=pretrained_backbone,
+            include_p2=include_p2_fpn,
+
+            use_groupnorm=backbone_use_gn,
+            num_gn_groups=backbone_num_gn_groups,
+        )
+
+        if include_p2_fpn:
+            self.fpn_level_map = {'0': 'P2', '1': 'P3', '2': 'P4', '3': 'P5'}
+        else:
+            self.fpn_level_map = {'0': 'P3', '1': 'P4', '2': 'P5'}
 
         # 2. positional embeddings
         if transformer_d_model != self.fpn_out_channels:
-            log(f"Warning: THANOSDetector transformer_d_model ({transformer_d_model}) "
+            log(f"Warning: THANOS transformer_d_model ({transformer_d_model}) "
                 f"differs from fpn_out_channels ({self.fpn_out_channels}). "
                 "Ensure this is intended or add projection layers.")
 
@@ -117,21 +158,44 @@ class THANOSDetector(nn.Module):
         if not num_anchors_per_loc:
             raise ValueError("AnchorGenerator.num_anchors_per_location() returned empty list.")
 
+
         self.head = RetinaNetHead(
             in_channels=self.fpn_out_channels,
             num_anchors=num_anchors_per_loc[0],  # use first anchor from per FPN list
             num_classes=self.num_classes
         )
+
+        if use_custom_classification_head:
+            self.head.classification_head = GNDropoutRetinaNetClassificationHead(
+                in_channels=self.fpn_out_channels,
+                num_anchors=num_anchors_per_loc[0],
+                num_classes=self.num_classes,
+
+                num_convs=classification_head_num_convs,
+                dropout_p=classification_head_dropout_p,
+                use_groupnorm=classification_head_use_groupnorm,
+                num_gn_groups=classification_head_num_gn_groups,
+
+                prior_probability=0.01,
+            )
+
         self.head.classification_head.focal_loss_alpha = focal_loss_alpha
         self.head.classification_head.focal_loss_gamma = focal_loss_gamma
 
-        # 5. loss calculation
-        self.box_coder = BoxCoder(weights=(1.0, 1.0, 1.0, 1.0))  # standard
+
+        # 5. box coder
+        self.box_coder = BoxCoder(weights=(1.0, 1.0, 1.0, 1.0))
+
+        # 6. matcher
         self.proposal_matcher = Matcher(
             high_threshold=matcher_high_threshold,
             low_threshold=matcher_low_threshold,
             allow_low_quality_matches=matcher_allow_low_quality,
         )
+
+
+        if load_weights_ckpt_path:
+            thanos_load_weights(self, load_weights_ckpt_path, ckpt_model_key_prefix, load_head_weights=True)
 
     def forward(self,
                 videos_batch: torch.Tensor,
@@ -237,76 +301,28 @@ class THANOSDetector(nn.Module):
                 "bbox_regression": losses_from_head["bbox_regression"],
             }
         else:  # inference
-            image_shapes_flat_for_postprocess = [(H_in, W_in)] * (B * T_clip)
+            image_shapes_flat = [(H_in, W_in)] * (B * T_clip)
+            cls_logits = head_outputs_dict["cls_logits"]
+            bbox_regression = head_outputs_dict["bbox_regression"]
+            head_outputs_tuple = (cls_logits, bbox_regression)
 
-            detections = self.postprocess_detections(
-                (head_outputs_dict['cls_logits'], head_outputs_dict['bbox_regression']),
-                anchors_per_frame,
-                image_shapes_flat_for_postprocess
+            detections = postprocess_detections(
+                head_outputs_tuple=head_outputs_tuple,
+                anchors_per_frame_input=anchors_per_frame,
+                image_shapes_flat=image_shapes_flat,
+                box_coder=self.box_coder,
+                num_classes=self.num_classes,
+                score_thresh=self.inference_score_thresh,
+                nms_thresh=self.inference_nms_thresh,
+                detections_per_img=self.inference_detections_per_img,
             )
+
             return detections
 
 
-    def postprocess_detections(self, head_outputs_tuple, anchors_per_frame_input: list[torch.Tensor],
-                               image_shapes_flat):
-        """
-        Postprocesses detections: applies score threshold, NMS, limits detections.
-        :param head_outputs_tuple:
-            - cls_logits shape [B*T_clip, NumTotalAnchorsPerFrame, NumClasses]
-            - bbox_regression shape [B*T_clip, NumTotalAnchorsPerFrame, 4].
-        :param anchors_per_frame_input: List (length B*T_clip) of anchor tensors, each of shape [NumTotalAnchorsForFrame, 4].
-        :param image_shapes_flat: Original height and width for each frame.
-        """
-        cls_logits_bt_na_nc, bbox_regression_bt_na_4 = head_outputs_tuple
 
-        flat_anchors_per_frame = anchors_per_frame_input
-
-        detections = []
-        for i in range(cls_logits_bt_na_nc.size(0)):  # B*T_clip times
-            pred_logits_this_image = cls_logits_bt_na_nc[i]  # [NumTotalAnchorsPerFrame, NumClasses]
-            pred_regression_this_image = bbox_regression_bt_na_4[i]  # [NumTotalAnchorsPerFrame, 4]
-            anchors_this_image = flat_anchors_per_frame[i]  # [NumTotalAnchorsPerFrame, 4]
-            image_shape = image_shapes_flat[i]  # (H, W)
-
-            boxes = self.box_coder.decode_single(pred_regression_this_image, anchors_this_image)
-            scores_all_classes = torch.sigmoid(pred_logits_this_image)  # [N_anchors_this_image, num_classes]
-
-            top_scores_per_anchor, top_labels_per_anchor = scores_all_classes.max(dim=1)
-
-            keep_idxs = top_scores_per_anchor >= self.inference_score_thresh
-
-            boxes = boxes[keep_idxs]
-            final_scores = top_scores_per_anchor[keep_idxs]
-            final_labels = top_labels_per_anchor[keep_idxs]
-
-            non_bg_keep_idxs = final_labels != 0
-            boxes = boxes[non_bg_keep_idxs]
-            final_scores = final_scores[non_bg_keep_idxs]
-            final_labels = final_labels[non_bg_keep_idxs]
-
-            if boxes.numel() == 0:
-                detections.append({
-                    "boxes": torch.empty((0, 4), device=boxes.device, dtype=boxes.dtype),
-                    "scores": torch.empty((0,), device=final_scores.device, dtype=final_scores.dtype),
-                    "labels": torch.empty((0,), device=final_labels.device, dtype=final_labels.dtype),
-                })
-                continue
-
-            keep_after_nms = nms(boxes, final_scores, self.inference_nms_thresh)
-
-            keep_after_nms = keep_after_nms[:self.inference_detections_per_img]
-
-            boxes = boxes[keep_after_nms]
-            final_scores = final_scores[keep_after_nms]
-            final_labels = final_labels[keep_after_nms]
-
-            current_image_size_tensor = torch.tensor(image_shape, device=boxes.device, dtype=torch.float32)
-            boxes = clip_boxes_to_image(boxes, current_image_size_tensor)
-
-            detections.append({
-                "boxes": boxes,
-                "scores": final_scores,
-                "labels": final_labels,
-            })
-        return detections
-
+if __name__ == "__main__":
+    from config import STAGE3_THANOS_DEFAULT_CONFIG
+    STAGE3_THANOS_DEFAULT_CONFIG['load_weights_from_ckpt'] = "../../.checkpoints/both.ckpt"
+    STAGE3_THANOS_DEFAULT_CONFIG['custom_head'] = True
+    model = THANOS(config=STAGE3_THANOS_DEFAULT_CONFIG)

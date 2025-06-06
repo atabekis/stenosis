@@ -20,7 +20,7 @@ from methods.detector_module import DetectionLightningModule
 # Local imports - models
 from models.stage1.retinanet import FPNRetinaNet
 from models.stage2.tsm_retinanet import TSMRetinaNet
-from models.stage3.thanos_detector import THANOSDetector
+from models.stage3.thanos_detector import THANOS
 
 # Local imports - controls & utility
 from util import log
@@ -39,6 +39,7 @@ from config import (
 # --- Default base configs ---
 
 DEFAULT_NORMALIZE_PARAMS = {'mean': [0.485, 0.456, 0.406], 'std': [0.229, 0.224, 0.225]}
+# DEFAULT_NORMALIZE_PARAMS = None
 
 BASE_CONFIG_SINGLE_GPU = {
     'batch_size': 32,
@@ -334,7 +335,7 @@ class Experiment:
         elif stage == 2:
             self.model = TSMRetinaNet(config=model_init_config)
         elif stage == 3:
-            self.model = THANOSDetector(config=model_init_config)
+            self.model = THANOS(config=model_init_config)
 
 
     def _setup_lightning_module(self):
@@ -527,7 +528,7 @@ if __name__ == "__main__":
     parser.add_argument("--use_grad_ckpt", action=argparse.BooleanOptionalAction, default=False)
 
     # Paths
-    parser.add_argument("--dataset_dir", type=str, default=CADICA_DATASET_DIR)
+    parser.add_argument("--dataset_dir", type=str, default='both')
     parser.add_argument("--log_dir", type=str, default=LOGS_DIR)
 
     parser.add_argument("--test_model_path", type=str, default=None)

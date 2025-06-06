@@ -21,6 +21,8 @@ from util import log
 
 from models.stage2.tsm_backbone import tsm_efficientnet_b0
 from models.stage2.tsm_load_weights import transfer_to_tsm_retinanet
+
+from models.common.postprocess import postprocess_detections
 from models.common.retinanet_utils import GNDropoutRetinaNetClassificationHead
 
 
@@ -65,6 +67,8 @@ class TSMRetinaNet(nn.Module):
         load_weights_ckpt_path = config.get("load_weights_from_ckpt", None)
         ckpt_model_key_prefix = config.get("ckpt_model_key_prefix", 'model.')
 
+        freeze_bn_in_backbone = config.get("freeze_bn_in_backbone", True) # Add a config option
+
         if load_weights_ckpt_path:
             pretrained_backbone = False
 
@@ -81,6 +85,7 @@ class TSMRetinaNet(nn.Module):
         log(f"  Focal Loss alpha: {focal_loss_alpha}")
         log(f"  Focal Loss gamma: {focal_loss_gamma}")
         log(f"  Pretrained backbone: {pretrained_backbone}")
+        log(f"  Freeze backbone BN: {freeze_bn_in_backbone and load_weights_ckpt_path is not None}")
         log(f"  Detections per image: {self.detections_per_img}")
         log(f"  Inserting TSM to internal stages {tsm_effnet_stages}")
         log(f"  Gradient checkpointing: {use_gradient_checkpointing}")
@@ -95,6 +100,8 @@ class TSMRetinaNet(nn.Module):
             tsm_stages_indices=tsm_effnet_stages,
             num_classes=self.num_classes,
             use_gradient_checkpoint=use_gradient_checkpointing,
+
+            freeze_bn=(freeze_bn_in_backbone and load_weights_ckpt_path is not None)
         )
 
         if include_p2_fpn:
@@ -158,6 +165,8 @@ class TSMRetinaNet(nn.Module):
             log(f'Loading weights from checkpoint: {load_weights_ckpt_path}')
             transfer_to_tsm_retinanet(self, load_weights_ckpt_path, ckpt_model_key_prefix)
 
+            if freeze_bn_in_backbone:  # this should only be used if we give weights from a ckpt
+                self.backbone.freeze_backbone_layers()
 
 
     def forward(
@@ -188,8 +197,6 @@ class TSMRetinaNet(nn.Module):
         anchors = self.anchor_generator(image_list, fpn_features_list) # List[Tensor] length B*T
         head_outputs = self.head(fpn_features_list) # Dict {'cls_logits', 'bbox_regression'}
 
-        detections = []
-        losses = {}
 
         if self.training:
             if targets is None: raise ValueError("targets should not be None in training")
@@ -216,66 +223,18 @@ class TSMRetinaNet(nn.Module):
 
         else:
             # inference mode
-            detections = self._postprocess_detections(head_outputs, anchors, image_sizes_list)
+            cls_logits = head_outputs["cls_logits"]
+            bbox_regression = head_outputs["bbox_regression"]
+            head_outputs_tuple = (cls_logits, bbox_regression)
+
+            detections = postprocess_detections(
+                head_outputs_tuple=head_outputs_tuple,
+                anchors_per_frame_input=anchors,
+                image_shapes_flat=image_sizes_list,
+                box_coder=self.box_coder,
+                num_classes=self.num_classes,
+                score_thresh=self.score_thresh,
+                nms_thresh=self.nms_thresh,
+                detections_per_img=self.detections_per_img
+            )
             return detections
-
-
-    @torch.no_grad()
-    def _postprocess_detections(
-        self,
-        head_outputs: dict[str, Tensor],
-        anchors: list[Tensor],
-        image_shapes: list[tuple[int, int]],
-    ) -> list[dict[str, Tensor]]:
-
-        """ Postprocessing detections, since the one from torchvision refuses to work!"""
-        class_logits = head_outputs["cls_logits"] # [B*T, num_anchors, num_classes]
-        box_regression = head_outputs["bbox_regression"] # [B*T, num_anchors, 4]
-        num_images = len(anchors) # B*T
-
-        detections = []
-
-        for i in range(num_images):
-            box_regression_per_image = box_regression[i]
-            logits_per_image = class_logits[i]
-            anchors_per_image = anchors[i]
-            image_shape = image_shapes[i]
-
-            scores_per_image = torch.sigmoid(logits_per_image)
-
-            pred_boxes_per_image = self.box_coder.decode_single(box_regression_per_image, anchors_per_image)
-            pred_boxes_per_image = box_ops.clip_boxes_to_image(pred_boxes_per_image, image_shape)
-
-            labels_per_image = torch.arange(self.num_classes, device=scores_per_image.device)
-            labels_per_image = labels_per_image.view(1, -1).expand_as(scores_per_image)
-
-            scores_per_image = scores_per_image.flatten()
-            labels_per_image = labels_per_image.flatten()
-
-            pred_boxes_per_image = pred_boxes_per_image.unsqueeze(1).expand(-1, self.num_classes, -1)
-            pred_boxes_per_image = pred_boxes_per_image.reshape(-1, 4)
-
-            inds_to_keep = torch.where((labels_per_image != 0) & (scores_per_image > self.score_thresh))[0]
-
-            pred_boxes_per_image = pred_boxes_per_image[inds_to_keep]
-            scores_per_image = scores_per_image[inds_to_keep]
-            labels_per_image = labels_per_image[inds_to_keep]
-
-            keep = box_ops.batched_nms(pred_boxes_per_image, scores_per_image, labels_per_image, self.nms_thresh)
-            keep = keep[:self.detections_per_img]
-
-            final_boxes = pred_boxes_per_image[keep]
-            final_scores = scores_per_image[keep]
-            final_labels = labels_per_image[keep]
-
-            detections.append({"boxes": final_boxes, "scores": final_scores, "labels": final_labels})
-
-        return detections
-
-
-if __name__ == "__main__":
-    from config import STAGE2_TSM_RETINANET_DEFAULT_CONFIG
-
-    STAGE2_TSM_RETINANET_DEFAULT_CONFIG['load_weights_from_ckpt'] = "../../logs/FPNRetinaNet/debug/version_4/checkpoints/last.ckpt"
-
-    model = TSMRetinaNet(config=STAGE2_TSM_RETINANET_DEFAULT_CONFIG)
