@@ -1,5 +1,5 @@
 # params_helper.py
-
+import re
 import torch
 import torch.nn as nn
 
@@ -160,6 +160,96 @@ def get_state_dict_from_ckpt(ckpt_path: str, model_key_prefix: str = 'model.') -
     log(f"Extracted {len(filtered)} entries with prefix '{model_key_prefix}' from {ckpt_path}.")
     return filtered
 
+
+
+def thanos_load_weights(model: nn.Module, ckpt_path: str, ckpt_model_key_prefix: str = "model.", load_head_weights: bool = True):
+    """
+    Loads weights into THANOS model's backbone and optionally head from an FPNRetinaNet checkpoint.
+    """
+    def _load_module(module: nn.Module, source_weights: dict):
+        tgt_state = module.state_dict()
+        loaded = 0
+        skipped_missing = 0
+        skipped_shape = 0
+        final_weights = {}
+
+        for key, tgt_param in tgt_state.items():
+            src_param = source_weights.get(key)
+            if src_param is None:
+                skipped_missing += 1
+            else:
+                if tgt_param.shape == src_param.shape:
+                    final_weights[key] = src_param
+                    loaded += 1
+                else:
+                    skipped_shape += 1
+
+        module.load_state_dict(final_weights, strict=False)
+        log(
+            f"Module '{module.__class__.__name__}' | "
+            f"Total keys: {len(tgt_state)}, "
+            f"Loaded: {loaded}, "
+            f"Skipped (missing): {skipped_missing}, "
+            f"Skipped (shape): {skipped_shape}"
+        )
+
+    if not hasattr(model, "backbone"):
+        log("THANOS Weight Load Error: model has no 'backbone' attribute.")
+        return
+    if load_head_weights and not hasattr(model, "head"):
+        log("THANOS Weight Load Error: load_head_weights=True but model has no 'head' attribute.")
+        return
+
+    full_ckpt_state = get_state_dict_from_ckpt(ckpt_path, model_key_prefix=ckpt_model_key_prefix)
+    if not full_ckpt_state:
+        log(f"THANOS: Checkpoint '{ckpt_path}' yielded no usable weights.")
+        return
+
+    # 1. load the backbone
+    backbone_prefixes = ["retinanet.backbone.", "backbone."]
+    for prefix in backbone_prefixes:
+        backbone_weights = {
+            k[len(prefix):]: v
+            for k, v in full_ckpt_state.items()
+            if k.startswith(prefix)
+        }
+        if backbone_weights:
+            _load_module(model.backbone, backbone_weights)
+            break
+    else:
+        # no backbone weights found under any prefix
+        _load_module(model.backbone, {})
+
+    # 2. conditionally load head
+    if load_head_weights:
+        head_prefix = "retinanet.head."
+        raw_head_weights = {
+            k[len(head_prefix):]: v
+            for k, v in full_ckpt_state.items()
+            if k.startswith(head_prefix)
+        }
+
+        if raw_head_weights:
+            remapped = {}
+            pattern = re.compile(r"classification_head\.conv\.(conv|gn)(\d+)\.(.*)")  # need to do some ugly matching due
+            for k_src, v_src in raw_head_weights.items():                             # to the custom cls head
+                match = pattern.match(k_src)
+                if match:
+                    layer_type = match.group(1) # conv or gn
+                    layer_idx = match.group(2) # e.g. '0'
+                    suffix = match.group(3) # e.g. 'weight'
+                    k_new = (
+                        f"classification_head.conv_tower_layers."
+                        f"{layer_idx}.{layer_type}{layer_idx}.{suffix}"
+                    )
+                    remapped[k_new] = v_src
+                else:
+                    remapped[k_src] = v_src
+
+            _load_module(model.head, remapped)
+        else:
+            # no head weights found under prefix
+            _load_module(model.head, {})
 
 
 def get_adaptive_groupnorm_layer(default_num_gn_groups: int):
