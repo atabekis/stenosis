@@ -1,26 +1,26 @@
 # thanos_detector.py
 
+# Typing
+from typing import Optional, Union
+
 # Torch imports
 import torch
 import torch.nn as nn
 from torchvision.ops import box_iou
+from torch.utils.checkpoint import checkpoint
 from torchvision.models.detection.image_list import ImageList
 from torchvision.models.detection.retinanet import RetinaNetHead  # For the head structure
-from torchvision.models.detection._utils import Matcher, BoxCoder  # For loss calculation
+from torchvision.models.detection._utils import Matcher, BoxCoder  # For loss calculation, passed onto the common postproc.
 from torchvision.models.detection.anchor_utils import AnchorGenerator
 
-# Typing
-from typing import Optional, Union
-
 # Local imports - models
-# from models.stage1.backbone import EfficientNetFPNBackbone
 from models.stage1.backbone_v2 import FPNBackbone
 from models.stage3.thanos_utils import LearnablePositionalEmbeddings
 from models.stage3.thanos_transformer import SpatioTemporalAttentionBlock
 
+from models.common.params_helper import thanos_load_weights
 from models.common.postprocess import postprocess_detections
 from models.common.retinanet_utils import GNDropoutRetinaNetClassificationHead
-from models.common.params_helper import thanos_load_weights
 
 
 # Logging
@@ -39,10 +39,8 @@ class THANOS(nn.Module):
 
         self.fpn_out_channels = config.get("fpn_out_channels", 256)
         pretrained_backbone = config.get("pretrained_backbone", True)
-
         include_p2_fpn = config.get("include_p2_fpn", False)
-
-
+        self.use_gradient_checkpointing = config.get("use_grad_ckpt", False)
         self.num_classes = config.get("num_classes")
 
         transformer_d_model = config.get("transformer_d_model", self.fpn_out_channels)
@@ -103,9 +101,8 @@ class THANOS(nn.Module):
         log(f"  Transformer Layers: Spatial={transformer_num_spatial_layers}, Temporal={transformer_num_temporal_layers}")
         log(f"  FPN Levels for Temporal Processing: {self.fpn_levels_to_process_temporally}")
         log(f"  PE Max Tokens: Spatial={max_spatial_tokens_pe}, Temporal={max_temporal_tokens_pe}")
-
+        log(f"  Gradient checkpointing: {self.use_gradient_checkpointing}")
         log(f"  Use Custom Classification Head: {use_custom_classification_head}")
-
 
 
         # set up the stage-1 backbone and FPN layers
@@ -148,7 +145,8 @@ class THANOS(nn.Module):
                 dim_feedforward=transformer_dim_feedforward,
                 num_spatial_layers=transformer_num_spatial_layers,
                 num_temporal_layers=transformer_num_temporal_layers,
-                dropout_rate=transformer_dropout_rate
+                dropout_rate=transformer_dropout_rate,
+                use_gradient_checkpointing=self.use_gradient_checkpointing
             )
 
         # 4. detection head
@@ -197,6 +195,15 @@ class THANOS(nn.Module):
         if load_weights_ckpt_path:
             thanos_load_weights(self, load_weights_ckpt_path, ckpt_model_key_prefix, load_head_weights=True)
 
+
+    def _checkpointed_forward(self, module_to_ckpt: nn.Module, *args_for_module):
+        """Helper to apply checkpointing to a given module's forward pass"""
+        if self.use_gradient_checkpointing and self.training and not isinstance(module_to_ckpt, nn.Identity):
+            return checkpoint(module_to_ckpt, *args_for_module, use_reentrant=False)
+        else:
+            return module_to_ckpt(*args_for_module)
+
+
     def forward(self,
                 videos_batch: torch.Tensor,
                 targets: Optional[list[list[dict[str, torch.Tensor]]]] = None
@@ -212,7 +219,8 @@ class THANOS(nn.Module):
 
         # 1. reshape for backbone and get FPN feats
         videos_batch_flat = videos_batch.view(B * T_clip, C_in, H_in, W_in)
-        fpn_features_flat_dict = self.backbone(videos_batch_flat)
+
+        fpn_features_flat_dict = self._checkpointed_forward(self.backbone, videos_batch_flat)
 
         # 2. apply spatiotemporal attn.
         enhanced_fpn_features_for_head_input = {}
@@ -260,8 +268,8 @@ class THANOS(nn.Module):
         image_list_for_anchors = ImageList(videos_batch_flat, image_sizes_for_imagelist)
         anchors_per_frame = self.anchor_generator(image_list_for_anchors, features_for_head)
 
-        # 4. pass to detection head ---
-        head_outputs_dict = self.head(features_for_head) # {cls_logits: [BT, SumAnchorsPerFrame, NumClasses], bbox_reg: [BT, SumAnchorsPerFrame, 4]}
+        # 4. pass to detection head: {cls_logits: [BT, SumAnchorsPerFrame, NumClasses], bbox_reg: [BT, SumAnchorsPerFrame, 4]}
+        head_outputs_dict = self._checkpointed_forward(self.head, features_for_head)
 
         # 5. compute loss (if training) or postprocess (inference)
         if self.training:
