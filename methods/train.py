@@ -34,12 +34,14 @@ def train_model(
         accumulate_grad_batches: int = 1,
         strategy: Optional[str] = None,
         deterministic: bool = True,
-        log_dir: str = LOGS_DIR,
+        ckpt_dir: str = LOGS_DIR,
         profiler_enabled: bool = False,
         profiler_scheduler_conf: Optional[dict] = None,
 
         resume_from_ckpt_path: Optional[str] = None,
         testing_ckpt_path:Optional[str] = None,
+
+        verbose: bool = True
 ):
     """
     Train given model, supports single and multi-gpu
@@ -53,7 +55,7 @@ def train_model(
     :param precision: precision mode
     :param strategy: distributed training strategy {'ddp', 'ddp_spawn', etc.} passed onto Trainer
     :param deterministic: whether to enable deterministic training
-    :param log_dir: directory to save tensorboard logs
+    :param ckpt_dir: directory to save tensorboard logs
     :param accumulate_grad_batches: number of batches to accumulate for larger effective batch size
     :param profiler_enabled: Whether PyTorch Lightning Profiler instance (e.g., PyTorchProfiler) activated
     :param profiler_scheduler_conf: config dictionary for steps/warmup/cycle to be used by the profiler scheduler
@@ -62,7 +64,7 @@ def train_model(
     :return: trained model
     """
 
-    Path(log_dir).mkdir(parents=True, exist_ok=True)
+    Path(ckpt_dir).mkdir(parents=True, exist_ok=True)
     enable_pbar = not "SLURM_JOB_ID" in os.environ
 
     experiment_name_core = model.__class__.__name__
@@ -77,7 +79,7 @@ def train_model(
 
     experiment_name = f'{experiment_name_core}/{experiment_folder_suffix}'
 
-    logger = TensorBoardLogger(save_dir=log_dir, name=experiment_name)
+    logger = TensorBoardLogger(save_dir=ckpt_dir, name=experiment_name)
 
     checkpoint_callback_val = ModelCheckpoint(
         filename=model.__class__.__name__ + '-{epoch:02d}-{val_loss:.4f}',
@@ -119,7 +121,7 @@ def train_model(
             prof_schedule = schedule(**profiler_scheduler_conf)
             profiler = PyTorchProfiler(
                 schedule=prof_schedule,
-                on_trace_ready=tensorboard_trace_handler(dir_name=logger.log_dir, use_gzip=True),
+                on_trace_ready=tensorboard_trace_handler(dir_name=logger.ckpt_dir, use_gzip=True),
                 profile_memory=True,
                 record_shapes=True,
                 with_stack=False,
@@ -177,18 +179,18 @@ def train_model(
 
 
     results_dict =  {
-        "trainer": trainer,
-        "logger": logger,
-        "checkpoint_callback": checkpoint_callback,
+        # "trainer": trainer,
+        # "logger": logger,
+        # "checkpoint_callback": checkpoint_callback,
         "final_test_metrics": None,
         "final_test_results": None,
     }
 
     if testing_ckpt_path:
-        log(f"Performing testing only using checkpoint: {testing_ckpt_path}")
+        log(f"Performing testing only using checkpoint: {testing_ckpt_path}", verbose=verbose)
         ckpt_to_test = testing_ckpt_path
     else:
-        log(f"Starting training. Resuming from checkpoint: {bool(resume_from_ckpt_path)}")
+        log(f"Starting training. Resuming from checkpoint: {bool(resume_from_ckpt_path)}", verbose=verbose)
         trainer.fit(lightning_module, data_module, ckpt_path=resume_from_ckpt_path)
 
         if checkpoint_callback and checkpoint_callback.best_model_path:
@@ -201,8 +203,8 @@ def train_model(
             ckpt_to_test = "last"
             log("No checkpoint files found, falling back to 'last' for trainer.test().")
 
-    log(f"Testing with checkpoint: {ckpt_to_test}")
-    trainer.test(lightning_module, datamodule=data_module, ckpt_path=ckpt_to_test)
+    log(f"Testing with checkpoint: {ckpt_to_test}", verbose=verbose)
+    trainer.test(lightning_module, datamodule=data_module, ckpt_path=ckpt_to_test, verbose=verbose)
 
     results_dict.update({
         "tested_checkpoint_path": ckpt_to_test,

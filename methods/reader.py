@@ -32,7 +32,9 @@ class Reader:
             debug=DEBUG,
             cadica_negative_only=CADICA_NEGATIVE_ONLY_ON_BOTH,
             iou_split_thresh = 0.01,
-            apply_gt_splitting = True,) -> None:
+            apply_gt_splitting = True,
+            verbose = True
+    ) -> None:
 
         self.dataset_dir = dataset_dir # can be path to CADICA, DANILOV or BOTH
         self.cadica_negative_only = cadica_negative_only
@@ -40,16 +42,19 @@ class Reader:
         self.iou_split_thresh = iou_split_thresh
         self.apply_gt_splitting = apply_gt_splitting
 
+        self.verbose = verbose
+
         self.xca_images = []
 
         self._which_dataset()
+
 
         if debug:
             log(f'Debug mode turned on, sampling {int(DEBUG_SIZE * 100)}% of the images')
             self.xca_images = random.sample(self.xca_images, int(len(self.xca_images) * DEBUG_SIZE))  # random.seed is set in pl.seed_everything
 
         log(f'Reader constructed {len(self.xca_images)} XCA images ({DEFAULT_HEIGHT}x{DEFAULT_WIDTH})'
-            f' from the {self.dataset_type} dataset.')
+            f' from the {self.dataset_type} dataset.', verbose=self.verbose)
 
     def _which_dataset(self):
         self.dataset_type = 'DANILOV' if 'DANILOV' in str(self.dataset_dir) else 'CADICA'
@@ -73,7 +78,7 @@ class Reader:
 
         # Group by filename, for possible multiple bounding boxes per image
         groups = df.groupby("filename")
-        log("Building XCA images from CSV files using the Danilov dataset.")
+        log("Building XCA images from CSV files using the Danilov dataset.", verbose=self.verbose)
 
         data_path = Path(dataset_dir) / 'dataset' if 'DANILOV' in str(dataset_dir).upper() else dataset_dir
 
@@ -140,7 +145,7 @@ class Reader:
             except Exception:
                 return None
 
-        log('Building XCA images from the CADICA dataset...')
+        log('Building XCA images from the CADICA dataset...', verbose=self.verbose)
 
         with concurrent.futures.ThreadPoolExecutor() as executor:
             results = executor.map(_make_image, tasks)
@@ -151,15 +156,15 @@ class Reader:
     def _load_both(self, cadica_negative_only):
         self.xca_images = []  # fresh start
         self.dataset_type = 'BOTH'
-        log(f'Loading both datasets. CADICA negative samples only: {self.cadica_negative_only}')
+        log(f'Loading both datasets. CADICA negative samples only: {self.cadica_negative_only}', verbose=self.verbose)
 
         danilov_images = self._load_danilov(DANILOV_DATASET_DIR)
         self.xca_images.extend(danilov_images)
-        log(f'Loaded {len(danilov_images)} images from DANILOV.')
+        log(f'Loaded {len(danilov_images)} images from DANILOV.', verbose=self.verbose)
 
         cadica_images = self._load_cadica(CADICA_DATASET_DIR, negative_only=cadica_negative_only)
         self.xca_images.extend(cadica_images)
-        log(f'Loaded {len(cadica_images)} images from CADICA.')
+        log(f'Loaded {len(cadica_images)} images from CADICA.', verbose=self.verbose)
 
 
     def _merge_labels(self, dataset_dir) -> pd.DataFrame:
@@ -169,7 +174,7 @@ class Reader:
         labels_csv = os.path.join(dataset_dir, 'labels.csv')
         if os.path.exists(labels_csv):
             df = pd.read_csv(labels_csv)
-            log(f"Merged dataset found at {labels_csv}. Loading merged dataset")
+            log(f"Merged dataset found at {labels_csv}. Loading merged dataset", verbose=self.verbose)
             return df
         else:
             train, test = os.path.join(dataset_dir, 'train_labels.csv'), os.path.join(dataset_dir, 'test_labels.csv')
@@ -177,7 +182,7 @@ class Reader:
             df = pd.concat([train_df, test_df], ignore_index=True)
             df.sort_values('filename', inplace=True)
             df.to_csv(labels_csv, index=False)
-            log(f"Merged dataset created and saved to {labels_csv}")
+            log(f"Merged dataset created and saved to {labels_csv}", verbose=self.verbose)
             return df
 
 
@@ -237,11 +242,11 @@ class Reader:
     def construct_videos(self, default_width=DEFAULT_WIDTH, default_height=DEFAULT_HEIGHT, min_subsegment_len=MIN_SUBSEGMENT_LENGTH):
         """Group XCAImage instances by patient_id and video_id to construct XCAVideo objects"""
 
-        log("Constructing XCAVideo sequences from XCA images...")
+        log("Constructing XCAVideo sequences from XCA images...", verbose=self.verbose)
 
-        log(f'Sub-segmenting videos based on bounding box movement.', verbose=self.apply_gt_splitting)  # will only print if apply_gt_splitting
-        log(f'   IoU threshold: {self.iou_split_thresh}', verbose=self.apply_gt_splitting)
-        log(f'   Minimum subsegment length: {min_subsegment_len}', verbose=self.apply_gt_splitting)
+        log(f'Sub-segmenting videos based on bounding box movement.', verbose=self.verbose and self.apply_gt_splitting)  # will only print if apply_gt_splitting
+        log(f'   IoU threshold: {self.iou_split_thresh}', verbose=self.verbose and self.apply_gt_splitting)
+        log(f'   Minimum subsegment length: {min_subsegment_len}', verbose=self.verbose and self.apply_gt_splitting)
 
 
         videos_dict = defaultdict(list)
@@ -314,7 +319,7 @@ class Reader:
         for sub_list in list_of_video_sub_lists:
             videos.extend(sub_list)
 
-        log(f'Reader constructed {len(videos)} total XCAVideo sub-segments (after potential splitting).')
+        log(f'Reader constructed {len(videos)} total XCAVideo sub-segments (after potential splitting).', verbose=self.verbose)
         return sorted(videos, key=lambda v: (v.dataset, v.patient_id, v.video_id, v.subsegment_id))
 
 

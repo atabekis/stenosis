@@ -28,7 +28,10 @@ class GNDropoutRetinaNetClassificationHead(RetinaNetClassificationHead):
                  use_groupnorm: bool = False,
                  num_gn_groups: int = 32,
 
-                 use_grad_ckpt: bool = False):
+                 use_grad_ckpt: bool = False,
+
+                 verbose=True,
+                 ):
 
         super().__init__(in_channels, num_anchors, num_classes, prior_probability)
 
@@ -37,11 +40,12 @@ class GNDropoutRetinaNetClassificationHead(RetinaNetClassificationHead):
         if not (1 <= num_convs <= 4):
             raise ValueError(f"num_convs must be between 1 and 4 (inclusive), got {num_convs}")
 
-        log(f"    Dropout Probability: {dropout_p}")
-        log(f"    Number of Convs: {num_convs}")
-        log(f"    Use GroupNorm: {use_groupnorm}")
-        if use_groupnorm:
-            log(f"      GN Groups: {num_gn_groups}")
+        if verbose:
+            log(f"    Dropout Probability: {dropout_p}")
+            log(f"    Number of Convs: {num_convs}")
+            log(f"    Use GroupNorm: {use_groupnorm}")
+            if use_groupnorm:
+                log(f"      GN Groups: {num_gn_groups}")
 
         self.custom_dropout_p = dropout_p
         self.custom_num_convs = num_convs

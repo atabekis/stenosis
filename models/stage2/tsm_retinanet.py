@@ -72,24 +72,24 @@ class TSMRetinaNet(nn.Module):
         if load_weights_ckpt_path:
             pretrained_backbone = False
 
-
-
-        log("Initializing TSMRetinaNet with parameters:")
-        log(f"  Num classes: {self.num_classes}")
-        log(f"  FPN out channels: {fpn_out_channels}")
-        log(f"  Include P2 in FPN: {include_p2_fpn}")
-        log(f"  Anchor sizes: {anchor_sizes}")
-        log(f"  Anchor aspect ratios: {anchor_aspect_ratios}")
-        log(f"  Score threshold: {self.score_thresh}")
-        log(f"  NMS threshold: {self.nms_thresh}")
-        log(f"  Focal Loss alpha: {focal_loss_alpha}")
-        log(f"  Focal Loss gamma: {focal_loss_gamma}")
-        log(f"  Pretrained backbone: {pretrained_backbone}")
-        log(f"  Freeze backbone BN: {freeze_bn_in_backbone and load_weights_ckpt_path is not None}")
-        log(f"  Detections per image: {self.detections_per_img}")
-        log(f"  Inserting TSM to internal stages {tsm_effnet_stages}")
-        log(f"  Gradient checkpointing: {use_gradient_checkpointing}")
-        log(f"  Use Custom Classification Head: {use_custom_classification_head}")
+        self.verbose = config.get('verbose', True)
+        if self.verbose:
+            log("Initializing TSMRetinaNet with parameters:")
+            log(f"  Num classes: {self.num_classes}")
+            log(f"  FPN out channels: {fpn_out_channels}")
+            log(f"  Include P2 in FPN: {include_p2_fpn}")
+            log(f"  Anchor sizes: {anchor_sizes}")
+            log(f"  Anchor aspect ratios: {anchor_aspect_ratios}")
+            log(f"  Score threshold: {self.score_thresh}")
+            log(f"  NMS threshold: {self.nms_thresh}")
+            log(f"  Focal Loss alpha: {focal_loss_alpha}")
+            log(f"  Focal Loss gamma: {focal_loss_gamma}")
+            log(f"  Pretrained backbone: {pretrained_backbone}")
+            log(f"  Freeze backbone BN: {freeze_bn_in_backbone and load_weights_ckpt_path is not None}")
+            log(f"  Detections per image: {self.detections_per_img}")
+            log(f"  Inserting TSM to internal stages {tsm_effnet_stages}")
+            log(f"  Gradient checkpointing: {use_gradient_checkpointing}")
+            log(f"  Use Custom Classification Head: {use_custom_classification_head}")
 
         # 1. TSM backbone
         self.backbone = tsm_efficientnet_b0(
@@ -101,7 +101,7 @@ class TSMRetinaNet(nn.Module):
             num_classes=self.num_classes,
             use_gradient_checkpoint=use_gradient_checkpointing,
 
-            freeze_bn=(freeze_bn_in_backbone and load_weights_ckpt_path is not None)
+            freeze_bn=freeze_bn_in_backbone
         )
 
         if include_p2_fpn:
@@ -143,7 +143,9 @@ class TSMRetinaNet(nn.Module):
 
                 prior_probability=0.01,
 
-                use_grad_ckpt=use_gradient_checkpointing
+                use_grad_ckpt=use_gradient_checkpointing,
+
+                verbose=self.verbose
             )
 
 
@@ -165,8 +167,8 @@ class TSMRetinaNet(nn.Module):
             log(f'Loading weights from checkpoint: {load_weights_ckpt_path}')
             transfer_to_tsm_retinanet(self, load_weights_ckpt_path, ckpt_model_key_prefix)
 
-            if freeze_bn_in_backbone:  # this should only be used if we give weights from a ckpt
-                self.backbone.freeze_backbone_layers()
+        if freeze_bn_in_backbone:
+            self.backbone.freeze_backbone_layers()
 
 
     def forward(

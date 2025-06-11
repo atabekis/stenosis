@@ -1,27 +1,16 @@
 # sca_utils.py
 import torch
 from torchvision.ops import box_iou
-from typing import Optional, List, Dict  # Added List, Dict for clarity
-
 
 def calculate_iou_individual(box1: torch.Tensor, box2: torch.Tensor) -> float:
     """
     Calculates IoU for two individual bounding boxes.
-    Args:
-        box1 (torch.Tensor): A tensor of shape (4,) [x1, y1, x2, y2].
-        box2 (torch.Tensor): A tensor of shape (4,) [x1, y1, x2, y2].
-    Returns:
-        float: The IoU value.
     """
     if box1.ndim == 1:
         box1 = box1.unsqueeze(0)
     if box2.ndim == 1:
         box2 = box2.unsqueeze(0)
-
-    # Ensure boxes are valid (e.g., x2 > x1, y2 > y1) before IoU if necessary,
-    # though box_iou might handle some degeneracies.
-    # For simplicity, assuming valid boxes from model output.
-    if box1.numel() != 4 or box2.numel() != 4:  # Basic check
+    if box1.numel() != 4 or box2.numel() != 4:
         return 0.0
 
     iou_matrix = box_iou(box1, box2)
@@ -30,16 +19,12 @@ def calculate_iou_individual(box1: torch.Tensor, box2: torch.Tensor) -> float:
 
 
 def apply_sequence_consistency_alignment(
-        sequence_detections: List[Dict[str, torch.Tensor]],
-        t_iou: float = 0.3,
-        t_frame: int = 3,
-        t_score_interp: float = 0.1,
-        max_frame_gap_for_linking: int = 1,
+        sequence_detections: list,
+        t_iou: float = 0.3, t_frame: int = 3, t_score_interp: float = 0.1, max_frame_gap_for_linking: int = 1,
         debug: bool = False
-) -> List[Dict[str, torch.Tensor]]:
+) -> list:
     """
     Applies Sequence Consistency Alignment (SCA) to a sequence of detections.
-
 
     :param sequence_detections: list of detection dictionaries, one for each frame in the sequence.
                                 Each dict contains 'boxes', 'scores', 'labels' tensors.
@@ -70,8 +55,8 @@ def apply_sequence_consistency_alignment(
     if debug: print(
         f"\nSCA DEBUG (R): Determined device: {device}. Starting Track Building. Frames: {num_total_frames}, t_iou: {t_iou}, max_gap: {max_frame_gap_for_linking}")
 
-    tracks: List[List[tuple[int, Dict[str, torch.Tensor]]]] = []
-    used_detections_coords: set[tuple[int, int]] = set()  # (frame_idx, original_idx_in_frame_detections)
+    tracks = []
+    used_detections_coords = set()  # (frame_idx, original_idx_in_frame_detections)
 
     for frame_idx in range(num_total_frames):
         current_frame_dets = sequence_detections[frame_idx]
@@ -88,7 +73,7 @@ def apply_sequence_consistency_alignment(
                 'label': current_frame_dets['labels'][original_idx].clone().to(device),
             }
 
-            new_track: List[tuple[int, Dict[str, torch.Tensor]]] = [(frame_idx, current_det_instance)]
+            new_track = [(frame_idx, current_det_instance)]
             used_detections_coords.add((frame_idx, original_idx))
             if debug: print(
                 f"SCA DEBUG (R): Frame {frame_idx}, Det {original_idx}: Starting new track: Label {current_det_instance['label'].item()}, Box {current_det_instance['box'].cpu().numpy().round(1)}")
@@ -103,7 +88,7 @@ def apply_sequence_consistency_alignment(
                 best_overall_match_original_idx = -1
 
                 # search window: from next frame up to max_frame_gap
-                for frame_offset in range(1, max_frame_gap_for_linking + 2):  # +1 for gap, +1 for Python range
+                for frame_offset in range(1, max_frame_gap_for_linking + 2):  # +1 for gap, +1
                     check_frame_idx = current_last_in_track_frame_idx + frame_offset
                     if check_frame_idx >= num_total_frames:
                         break
@@ -187,12 +172,12 @@ def apply_sequence_consistency_alignment(
                 f"SCA DEBUG (R): Kept Track {i} (length {len(track)}): {[(f_idx, det_inst['label'].item()) for f_idx, det_inst in track]}")
 
     #  3. interpolate missing dets in kept tracks
-    final_processed_tracks: List[List[tuple[int, Dict[str, torch.Tensor]]]] = []
+    final_processed_tracks  = []
     if debug: print(f"\nSCA DEBUG (R): --- Interpolating Kept Tracks ---")
     for track_idx, track in enumerate(kept_tracks):
         if not track: continue
 
-        interpolated_track_elements: List[tuple[int, Dict[str, torch.Tensor]]] = []
+        interpolated_track_elements = []
         track.sort(key=lambda x: x[0])
 
         existing_detections_map = {f_idx: det_inst for f_idx, det_inst in track}
@@ -253,7 +238,7 @@ def apply_sequence_consistency_alignment(
 
     #  4. reconstruct output
     if debug: print(f"\nSCA DEBUG (R): --- Reconstructing Output ---")
-    refined_sequence_detections_list_of_lists: List[Dict[str, list]] = [
+    refined_sequence_detections_list_of_lists = [
         {'boxes': [], 'scores': [], 'labels': []} for _ in range(num_total_frames)
     ]
 
@@ -264,7 +249,7 @@ def apply_sequence_consistency_alignment(
                 refined_sequence_detections_list_of_lists[frame_idx]['scores'].append(det_instance['score'].to(device))
                 refined_sequence_detections_list_of_lists[frame_idx]['labels'].append(det_instance['label'].to(device))
 
-    final_output_sequence: List[Dict[str, torch.Tensor]] = []
+    final_output_sequence = []
     for frame_idx, frame_data in enumerate(refined_sequence_detections_list_of_lists):
         if frame_data['boxes']:
             try:
@@ -280,11 +265,11 @@ def apply_sequence_consistency_alignment(
                         f"  Box {i_t} device: {t_b.device}, dtype: {t_b.dtype}, shape: {t_b.shape}")
                     for i_t, t_l in enumerate(frame_data['labels']): print(
                         f"  Label {i_t} device: {t_l.device}, dtype: {t_l.dtype}, shape: {t_l.shape}")
-                # Fallback to empty if stacking fails
+                # fallback to empty if stacking fails
                 boxes = torch.empty((0, 4), device=device, dtype=torch.float32)
                 scores = torch.empty((0,), device=device, dtype=torch.float32)
                 labels = torch.empty((0,), device=device, dtype=torch.int64)
-        else:  # Lists were empty
+        else:  # lists were empty
             boxes = torch.empty((0, 4), device=device, dtype=torch.float32)
             scores = torch.empty((0,), device=device, dtype=torch.float32)
             labels = torch.empty((0,), device=device, dtype=torch.int64)

@@ -61,25 +61,28 @@ class FPNRetinaNet(nn.Module):
         load_weights_ckpt_path = config.get("load_weights_from_ckpt", None)
         ckpt_model_key_prefix = config.get("ckpt_model_key_prefix", 'model.')
 
+        verbose = config.get('verbose', True)
+
         if load_weights_ckpt_path:  # disable imagenet weights if we give a checkpoint
             pretrained_backbone = False
 
-        log("Initializing FPNRetinaNet with parameters:")
-        log(f"  Num classes: {num_classes}")
-        log(f"  Backbone variant: {backbone_variant}")
-        log(f"  Include P2 in FPN: {include_p2_fpn}")
-        log(f"  Backbone GroupNorm: {backbone_use_gn}")
-        log(f"  FPN out channels: {fpn_out_channels}")
-        log(f"  Anchor sizes: {anchor_sizes}")
-        log(f"  Anchor aspect ratios: {anchor_aspect_ratios}")
-        log(f"  Score threshold: {score_thresh}")
-        log(f"  NMS threshold: {nms_thresh}")
-        log(f"  Focal Loss alpha: {focal_loss_alpha}")
-        log(f"  Focal Loss gamma: {focal_loss_gamma}")
-        log(f"  Pretrained backbone: {pretrained_backbone}")
-        log(f"  Detections per image: {detections_per_img}")
+        if verbose:
+            log("Initializing FPNRetinaNet with parameters:")
+            log(f"  Num classes: {num_classes}")
+            log(f"  Backbone variant: {backbone_variant}")
+            log(f"  Include P2 in FPN: {include_p2_fpn}")
+            log(f"  Backbone GroupNorm: {backbone_use_gn}")
+            log(f"  FPN out channels: {fpn_out_channels}")
+            log(f"  Anchor sizes: {anchor_sizes}")
+            log(f"  Anchor aspect ratios: {anchor_aspect_ratios}")
+            log(f"  Score threshold: {score_thresh}")
+            log(f"  NMS threshold: {nms_thresh}")
+            log(f"  Focal Loss alpha: {focal_loss_alpha}")
+            log(f"  Focal Loss gamma: {focal_loss_gamma}")
+            log(f"  Pretrained backbone: {pretrained_backbone}")
+            log(f"  Detections per image: {detections_per_img}")
 
-        log(f"  Use Custom Classification Head: {use_custom_classification_head}")
+            log(f"  Use Custom Classification Head: {use_custom_classification_head}")
 
         # 1. backbone & fpn
         self.backbone = BackboneV2(
@@ -125,6 +128,8 @@ class FPNRetinaNet(nn.Module):
                 num_gn_groups=classification_head_num_gn_groups,
 
                 prior_probability=0.01,
+
+                verbose=verbose
             )
 
 

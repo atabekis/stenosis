@@ -81,28 +81,31 @@ class THANOS(nn.Module):
         classification_head_use_groupnorm = config.get("classification_head_use_groupnorm", False)
         classification_head_num_gn_groups = config.get("classification_head_num_gn_groups", 32)
 
+        verbose = config.get("verbose", True)
+
         if load_weights_ckpt_path:  # disable imagenet weights if we give a checkpoint
             pretrained_backbone = False
 
-        log("Initializing THANOS with parameters:")
-        log(f"  Num classes: {self.num_classes}")
-        log(f"  FPN out channels: {self.fpn_out_channels}")
-        log(f"  Include P2 in FPN: {include_p2_fpn}")
-        log(f"  Backbone GroupNorm: {backbone_use_gn}")
-        log(f"  Anchor sizes: {anchor_sizes}")
-        log(f"  Anchor aspect ratios: {anchor_aspect_ratios}")
-        log(f"  Score threshold: {self.inference_score_thresh}")
-        log(f"  NMS threshold: {self.inference_nms_thresh}")
-        log(f"  Focal Loss alpha: {focal_loss_alpha}")
-        log(f"  Focal Loss gamma: {focal_loss_gamma}")
-        log(f"  Pretrained backbone: {pretrained_backbone}")
-        log(f"  Detections per image: {self.inference_detections_per_img}")
-        log(f"  Transformer: d_model={transformer_d_model}, n_head={transformer_n_head}, ff_dim={transformer_dim_feedforward}")
-        log(f"  Transformer Layers: Spatial={transformer_num_spatial_layers}, Temporal={transformer_num_temporal_layers}")
-        log(f"  FPN Levels for Temporal Processing: {self.fpn_levels_to_process_temporally}")
-        log(f"  PE Max Tokens: Spatial={max_spatial_tokens_pe}, Temporal={max_temporal_tokens_pe}")
-        log(f"  Gradient checkpointing: {self.use_gradient_checkpointing}")
-        log(f"  Use Custom Classification Head: {use_custom_classification_head}")
+        if verbose:
+            log("Initializing THANOS with parameters:")
+            log(f"  Num classes: {self.num_classes}")
+            log(f"  FPN out channels: {self.fpn_out_channels}")
+            log(f"  Include P2 in FPN: {include_p2_fpn}")
+            log(f"  Backbone GroupNorm: {backbone_use_gn}")
+            log(f"  Anchor sizes: {anchor_sizes}")
+            log(f"  Anchor aspect ratios: {anchor_aspect_ratios}")
+            log(f"  Score threshold: {self.inference_score_thresh}")
+            log(f"  NMS threshold: {self.inference_nms_thresh}")
+            log(f"  Focal Loss alpha: {focal_loss_alpha}")
+            log(f"  Focal Loss gamma: {focal_loss_gamma}")
+            log(f"  Pretrained backbone: {pretrained_backbone}")
+            log(f"  Detections per image: {self.inference_detections_per_img}")
+            log(f"  Transformer: d_model={transformer_d_model}, n_head={transformer_n_head}, ff_dim={transformer_dim_feedforward}")
+            log(f"  Transformer Layers: Spatial={transformer_num_spatial_layers}, Temporal={transformer_num_temporal_layers}")
+            log(f"  FPN Levels for Temporal Processing: {self.fpn_levels_to_process_temporally}")
+            log(f"  PE Max Tokens: Spatial={max_spatial_tokens_pe}, Temporal={max_temporal_tokens_pe}")
+            log(f"  Gradient checkpointing: {self.use_gradient_checkpointing}")
+            log(f"  Use Custom Classification Head: {use_custom_classification_head}")
 
 
         # set up the stage-1 backbone and FPN layers
@@ -175,6 +178,8 @@ class THANOS(nn.Module):
                 num_gn_groups=classification_head_num_gn_groups,
 
                 prior_probability=0.01,
+
+                verbose=verbose
             )
 
         self.head.classification_head.focal_loss_alpha = focal_loss_alpha

@@ -35,6 +35,8 @@ class XCADataModule(pl.LightningDataModule):
             jitter: bool = False,
 
             seed: int = SEED,
+
+            verbose: bool = True
     ):
         """
         Initialize the data module
@@ -61,6 +63,7 @@ class XCADataModule(pl.LightningDataModule):
 
         self.jitter = jitter
 
+        self.verbose = verbose
 
         self.using_video_format = isinstance(data_list[0], XCAVideo) if data_list else True
         self.t_clip = t_clip if self.using_video_format else 1  # also done in dataset.py, but can never be too sure lol
@@ -112,7 +115,7 @@ class XCADataModule(pl.LightningDataModule):
         if self.train_dataset is not None:
             return
 
-        log(f"Creating DataLoaders for training, validation and test sets... ({TRAIN_SIZE}/{VAL_SIZE}/{TEST_SIZE})")
+        log(f"Creating DataLoaders for training, validation and test sets... ({TRAIN_SIZE}/{VAL_SIZE}/{TEST_SIZE})", verbose=self.verbose)
 
         self.train_data, self.val_data, self.test_data = self._split_data()
 
@@ -128,11 +131,11 @@ class XCADataModule(pl.LightningDataModule):
             ),
             len(dl)
         )
-        splits = {'Train Set': count(self.train_data), 'Validation Set': count(self.val_data), 'Test Set': count(self.test_data)}
-
-        for name, (pos, total) in splits.items():
-            neg = total - pos
-            log(f"   {name:15}: {total} {add:2} ({pos} positive / {neg} negative)")
+        if self.verbose:
+            splits = {'Train Set': count(self.train_data), 'Validation Set': count(self.val_data), 'Test Set': count(self.test_data)}
+            for name, (pos, total) in splits.items():
+                neg = total - pos
+                log(f"   {name:15}: {total} {add:2} ({pos} positive / {neg} negative)")
 
         # temporarily create train dataset to extract norm. params
         if self.normalize_params is None:
@@ -160,7 +163,7 @@ class XCADataModule(pl.LightningDataModule):
             jitter=self.jitter
         )
 
-        self._validate_dataset_samples(self.train_dataset, 'Training Set')
+        self._validate_dataset_samples(self.train_dataset, 'Training Set', verbose=self.verbose)
 
         self.val_dataset = XCADataset(
             data_list=self.val_data,
@@ -172,7 +175,7 @@ class XCADataModule(pl.LightningDataModule):
             jitter=False,
         )
 
-        self._validate_dataset_samples(self.val_dataset, 'Validation Set')
+        self._validate_dataset_samples(self.val_dataset, 'Validation Set', verbose=self.verbose)
 
         self.test_dataset = XCADataset(
             data_list=self.test_data,
@@ -217,17 +220,17 @@ class XCADataModule(pl.LightningDataModule):
 
 
     @staticmethod
-    def _validate_dataset_samples(dataset, name, num_samples=3):
+    def _validate_dataset_samples(dataset, name, num_samples=3, verbose=True):
         """
         Validate a few samples to catch potential dataset issues.
         """
         length = len(dataset) if dataset else 0
         if length == 0:
-            log(f"Skipping validation for {name}: empty dataset.")
+            log(f"Skipping validation for {name}: empty dataset.", verbose=verbose)
             return
 
         samples = min(num_samples, length)
-        log(f"Validating {samples} samples from {name}...")
+        log(f"Validating {samples} samples from {name}...", verbose=verbose)
         indices = random.sample(range(length), samples)
 
         is_video = getattr(dataset, "using_video_format", False)
@@ -267,7 +270,7 @@ class XCADataModule(pl.LightningDataModule):
                 log(f"Error validating index {idx}: {e}")
                 raise
 
-        log(f"Successfully validated {samples} samples from {name}.")
+        log(f"Successfully validated {samples} samples from {name}.", verbose=verbose)
 
     @staticmethod
     def _validate_target_dict(target, context):

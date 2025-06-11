@@ -140,7 +140,7 @@ def get_state_dict_from_ckpt(ckpt_path: str, model_key_prefix: str = 'model.') -
 
     # return full state_dict if no prefix specified
     if not model_key_prefix:
-        log(f"Returning full state_dict from {ckpt_path} with {len(state_dict)} initial keys.")
+        log(f"Returning full state_dict from {ckpt_path} with {len(state_dict)} initial keys.", verbose=True)
         return state_dict
 
     # filter and strip prefix
