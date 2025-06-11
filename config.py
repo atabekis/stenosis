@@ -1,9 +1,10 @@
 # config.py
+import os
 import numpy as np
 from pathlib import Path
 
 # ------------ RANDOM SEED -------------- #
-SEED = 5
+SEED = 55
 
 # --------------- PATHS ----------------- #
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -13,11 +14,16 @@ DANILOV_DATASET_DIR = PROJECT_ROOT / "data/DANILOV"
 DANILOV_DATASET_PATH = DANILOV_DATASET_DIR / "dataset"
 
 LOGS_DIR = PROJECT_ROOT / "logs"
+WEIGHTS_DIR = PROJECT_ROOT / "weights"
+RESULTS_DIR = PROJECT_ROOT / 'results'
+CHECKPOINTS_DIR = PROJECT_ROOT / "checkpoints"
 
-CHECKPOINTS_DIR = PROJECT_ROOT / 'checkpoints'
+LOGS_DIR.mkdir(exist_ok=True); WEIGHTS_DIR.mkdir(exist_ok=True)
+RESULTS_DIR.mkdir(exist_ok=True); CHECKPOINTS_DIR.mkdir(exist_ok=True)  # create if not existing
 
-BACKBONE_MODEL_WEIGHTS = ".checkpoints/ep5.ckpt" # using pretrained model checkpoint
-# BACKBONE_MODEL_WEIGHTS = None
+
+# BACKBONE_MODEL_WEIGHTS = ".checkpoints/ep5hpc.ckpt" # using pretrained model checkpoint
+BACKBONE_MODEL_WEIGHTS = None
 
 # ------------- CONTROLS --------------- #
 DEBUG = False
@@ -54,9 +60,9 @@ NUM_WORKERS = 8
 DEFAULT_WIDTH = DEFAULT_HEIGHT = 800  # pixels
 
 
-APPLY_ADAPTIVE_CONTRAST = True
+APPLY_ADAPTIVE_CONTRAST = False
 USE_STD_DEV_CHECK_FOR_CLAHE = True # if False, contrast will be applied to every image
-ADAPTIVE_CONTRAST_LOW_STD_THRESH = 21.0  # if std < thresh, contrast is applied
+ADAPTIVE_CONTRAST_LOW_STD_THRESH = 23.0  # if std < thresh, contrast is applied
 CLAHE_CLIP_LIMIT = 5.0
 CLAHE_TILE_GRID_SIZE = (8, 8)
 
@@ -71,7 +77,7 @@ FOCAL_LOSS_GAMMA = 2.0
 
 DETECTIONS_PER_IMG_AFTER_NMS = 3  # give the model some flexibility
 
-INFERENCE_SCORE_THRESH = 0.35  # passed onto score_threshold in RetinaNet
+INFERENCE_SCORE_THRESH = 0.35 # passed onto score_threshold in RetinaNet
 INFERENCE_NMS_THRESH = 0.4   # passed onto nms_thresh in RetinaNet
 PRF1_THRESH = INFERENCE_SCORE_THRESH  # used in calculating the Precision Recall, F1 scores at a threshold
 IOU_THRESH_METRIC = 0.5  # used in metric calculation, IoU@0.5
@@ -92,18 +98,17 @@ DEFAULT_ANCHOR_ASPECT_RATIOS = ((0.5, 1.0, 2.0), (0.5, 1.0, 2.0), (0.5, 1.0, 2.0
 OPTIMIZER_CONFIG = {
     'name': 'Adamw',
     'base_lr': 1e-4,
-    'weight_decay': 5e-4,
+    'weight_decay': 1e-5,
     "differential_lr": {
         "enabled": True,  # false to use base_lr for all params
-        "lr_backbone": 1e-4,
-        "lr_fpn": 3e-5,
+        "lr_backbone": 2e-5,
+        "lr_fpn": 2e-5,
         "lr_transformer_thanos": 5e-5,
         "lr_regression_head": 5e-5,
         "lr_classification_head": 5e-5,
         "lr_other": 1e-5
     }
 }
-
 
 COMMON_BACKBONE_FPN_CONFIG = {
     "backbone_variant": DEFAULT_BACKBONE_VARIANT,
