@@ -1,8 +1,8 @@
-import os
 import argparse
 from tensorboard import program
-from config import LOGS_DIR
+
 from util import log
+from config import CHECKPOINTS_DIR
 
 def launch_tensorboard(log_dir):
     tb = program.TensorBoard()
@@ -18,7 +18,7 @@ def launch_tensorboard(log_dir):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Launch TensorBoard')
-    parser.add_argument('--log-dir', type=str, default=str(LOGS_DIR), help='TensorBoard log directory')
+    parser.add_argument('--logdir', type=str, default=str(CHECKPOINTS_DIR), help='TensorBoard log directory')
     args = parser.parse_args()
     launch_tensorboard(args.log_dir)
 

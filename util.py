@@ -5,8 +5,13 @@ import os
 import math
 import torch
 import inspect
+import logging
 import datetime
-import multiprocessing as mp
+import pandas as pd
+
+from config import LOGS_DIR
+
+LOG_LOCALLY = True
 
 _DEFAULT_COLORS = {
     "timestamp": "\033[92m", # green
@@ -20,6 +25,24 @@ if _is_slurm_env:
     COLORS = {key: "" for key in _DEFAULT_COLORS}
 else:
     COLORS = _DEFAULT_COLORS
+
+
+def _configure_logger(log_dir) -> logging.Logger:
+    logger = logging.getLogger()
+    if logger.handlers:
+        return logger
+
+    logging.basicConfig(
+        filename=log_dir / "project.log",
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(filename)s.%(funcName)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+        encoding="utf-8",
+    )
+    return logger
+
+_LOGGER = _configure_logger(LOGS_DIR)
+
 
 def log(*args, verbose=True, show_func=True, omit_funcs=None, **kwargs):
     """
@@ -52,6 +75,13 @@ def log(*args, verbose=True, show_func=True, omit_funcs=None, **kwargs):
 
     message = ''.join(map(str, args))
     print("".join(parts), f"\"{message}\"", **kwargs)
+
+    if LOG_LOCALLY:
+        _LOGGER.log(
+            level=logging.WARNING if "warning" in message.lower() else logging.INFO,
+            msg=message,
+            stacklevel=2
+        )
 
 
 
@@ -114,3 +144,75 @@ def has_positive_gt(sample_targets, positive_class_id: int, model_stage: int) ->
         ):
             return True
     return False
+
+
+def save_results_to_csv(results, csv_path, model_name):
+    """
+    Persist test-run metrics to *csv_path*.
+    Rows are unique on (stage, t_clip); newer entries overwrite older ones.
+    Accuracy metrics are rounded to 3 dp, fps to 1 dp, latency to 1 dp.
+    """
+    # --------------------------------------------------------------------- #
+    _METRIC_MAP = {
+        "test/mAP_0.5": "mAP",
+        "test/mAR_100": "mAR_100",
+        "test/AvgIoU_TP_0.5": "AvgIoU_TP_0.5",
+        "test/AP_small": "AP_small",
+        "test/Precision_0.5": "Precision",
+        "test/Recall_0.5": "Recall",
+        "test/F1_0.5": "F1",
+    }
+    _SPEED_KEYS = [
+        "avg_time_ms_batch",       # kept for completeness (no rounding rule)
+        "avg_latency_ms_batch",
+        "avg_latency_ms_frame",
+        "fps",
+    ]
+
+    metrics = results.get("test_results", {}).get("final_test_metrics", {})
+    if not metrics:
+        print(f"[save_results_to_csv] No test metrics for '{model_name}'.")
+        return
+
+    # ---------- build one-row DataFrame ----------------------------------- #
+    row = {
+        "model_name": model_name,
+        "stage": results.get("model_stage"),
+        "t_clip": results.get("run_config_metrics", {}).get("t_clip"),
+        **{new: metrics.get(old) for old, new in _METRIC_MAP.items()},
+        **{
+            k: results.get("inference_speed_stats", {}).get(k)
+            for k in _SPEED_KEYS
+        },
+    }
+    df_new = pd.DataFrame([row])
+
+    # ---------- merge with existing CSV (if any) -------------------------- #
+    if csv_path.is_file():
+        df = pd.concat([pd.read_csv(csv_path), df_new], ignore_index=True)
+        df = (
+            df.sort_values(["stage", "t_clip"])
+              .drop_duplicates(subset=["stage", "t_clip"], keep="last")
+              .reset_index(drop=True)
+        )
+        print(f"[save_results_to_csv] Updated '{csv_path}' for '{model_name}'.")
+    else:
+        csv_path.parent.mkdir(parents=True, exist_ok=True)
+        df = df_new
+        print(f"[save_results_to_csv] Created '{csv_path}' for '{model_name}'.")
+
+    # ---------- apply required rounding ----------------------------------- #
+    acc_cols = list(_METRIC_MAP.values())
+    fps_cols = ["fps"]
+    latency_cols = ["avg_latency_ms_batch", "avg_latency_ms_frame", "avg_time_ms_batch"]
+
+    for col in acc_cols:
+        if col in df:
+            df[col] = df[col].round(3)
+
+    for col in fps_cols + latency_cols:
+        if col in df:
+            df[col] = df[col].round(1)
+
+    # ---------- write out -------------------------------------------------- #
+    df.to_csv(csv_path, index=False)
