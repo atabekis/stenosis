@@ -3,6 +3,7 @@
 # Python imports
 import os
 import sys
+import logging
 import argparse
 import warnings
 import traceback
@@ -10,6 +11,7 @@ import traceback
 # Torch + PL
 import torch
 import pytorch_lightning as pl
+from torch.cuda import Event as CudaEvent  # precise GPU timing
 
 # Local imports - methods
 from methods.reader import Reader
@@ -24,16 +26,12 @@ from models.stage3.thanos_detector import THANOS
 
 # Local imports - controls & utility
 from util import log
-from config import (
-    SEED, DEBUG, NUM_WORKERS,
-    CADICA_DATASET_DIR, LOGS_DIR,
-    DEFAULT_HEIGHT, DEFAULT_WIDTH,
-    TRAIN_SIZE, VAL_SIZE, TEST_SIZE,
-    NUM_CLASSES, POSITIVE_CLASS_ID, FOCAL_LOSS_ALPHA, FOCAL_LOSS_GAMMA, T_CLIP,
-    STAGE1_RETINANET_DEFAULT_CONFIG, STAGE2_TSM_RETINANET_DEFAULT_CONFIG, STAGE3_THANOS_DEFAULT_CONFIG,
-    OPTIMIZER_CONFIG,
-    TEST_MODEL_ON_KEYBOARD_INTERRUPT, DANILOV_DATASET_DIR,
-)
+from config import SEED, DEBUG, NUM_WORKERS   # global controls
+from config import TRAIN_SIZE, VAL_SIZE, TEST_SIZE  # train-val-test split values
+from config import DEFAULT_HEIGHT, DEFAULT_WIDTH, T_CLIP  # data-level
+from config import POSITIVE_CLASS_ID, NUM_CLASSES, OPTIMIZER_CONFIG # training helpers
+from config import CADICA_DATASET_DIR, DANILOV_DATASET_DIR, CHECKPOINTS_DIR #  paths
+from config import STAGE1_RETINANET_DEFAULT_CONFIG, STAGE2_TSM_RETINANET_DEFAULT_CONFIG, STAGE3_THANOS_DEFAULT_CONFIG
 
 
 # --- Default base configs ---
@@ -49,7 +47,7 @@ BASE_CONFIG_SINGLE_GPU = {
     'weight_decay': OPTIMIZER_CONFIG['weight_decay'],
     'gradient_clip_val': 1.0,
     'warmup_steps': 100,
-    'scheduler': 'cosine',
+    'scheduler': 'reduce',
     'scheduler_patience_config': 5, # patience for mode 'reduce', used as patience in ReduceLROnPlateau
     'patience': 15,
     'normalize_params': DEFAULT_NORMALIZE_PARAMS,
@@ -60,11 +58,12 @@ BASE_CONFIG_SINGLE_GPU = {
     'seed': SEED,
     'debug': DEBUG,
     'dataset_dir': CADICA_DATASET_DIR,
-    'log_dir': LOGS_DIR,
+    'ckpt_dir': CHECKPOINTS_DIR,
     'num_log_val_images': 2,
     'use_sca': False,
     'subsegment': False,
     'iou_split_thresh': 0.01,
+    'verbose': True,
 }
 
 BASE_CONFIG_MULTI_GPU = {
@@ -84,9 +83,9 @@ warnings.filterwarnings("ignore", message=r"Detected call of `lr_scheduler.step\
 warnings.filterwarnings("ignore", message=r".*A new version of Albumentations is available:.*", category=UserWarning)
 
 
-def setup_reproducibility(seed, deterministic):
+def setup_reproducibility(seed, deterministic, verbose=True):
     """Seed everything and toggle CUDNN deterministic/benchmark modes."""
-    pl.seed_everything(seed, workers=True)
+    pl.seed_everything(seed, workers=True, verbose=verbose)
     torch.backends.cudnn.deterministic = deterministic
     torch.backends.cudnn.benchmark = not deterministic
 
@@ -109,6 +108,18 @@ class Experiment:
         self.data_module = None
         self.lightning_module = None
 
+        self._cached_reader_instance = None
+        self._cached_image_data_list = None
+        self._cached_video_data_lists = {}  # can have different params, best to keep in dict
+
+        self.verbose = config.get('verbose', True)
+
+    @property
+    def reader(self):
+        """Used to access the reader used by Experiment"""
+        if not self._cached_reader_instance:
+            self.prepare_for_testing({'model_stage': 2, 'test_model_path': '.'}) # load stage 2 so that we also construct videos
+        return self._cached_reader_instance
 
     def _validate_config(self):
         """Ensure configuration keys are present and valid."""
@@ -136,14 +147,18 @@ class Experiment:
         cfg = self.config
         setup_reproducibility(
             cfg.get('seed', SEED),
-            cfg.get('deterministic', False)
+            cfg.get('deterministic', False),
+            verbose=self.verbose
         )
         torch.set_float32_matmul_precision('high')
 
-        os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
-
+        # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'  # for debugging
         os.environ['NO_ALBUMENTATIONS_UPDATE'] = '1'  # to suppress the annoying updates
 
+        if not cfg.get('verbose', True):  # in Jupyter the logs have some buggy behavior
+            logging.getLogger("pytorch_lightning").setLevel(logging.ERROR)
+            logging.getLogger("lightning.pytorch.utilities.rank_zero").setLevel(logging.ERROR)
+            logging.getLogger("lightning.pytorch.accelerators.cuda").setLevel(logging.ERROR)
 
     def _determine_devices_and_strategy(self):
         """
@@ -275,33 +290,48 @@ class Experiment:
         """
         Initialize the Reader, load images or videos depending on stage, and build the DataModule.
         """
+        rc = self.run_config
+
         dataset_map = {
             'danilov': DANILOV_DATASET_DIR,
             'cadica': CADICA_DATASET_DIR,
             'both': 'both'  # for consistency
         }
 
-        rc = self.run_config
+        dataset_dir = dataset_map.get(str(rc['dataset_dir']).lower(), rc['dataset_dir'])
+        reader_params_key = (dataset_dir, rc['debug'], rc['iou_split_thresh'], rc.get('subsegment', False))
 
-        if str(rc['dataset_dir']).lower() in dataset_map.keys():
-            rc['dataset_dir'] = dataset_map[rc['dataset_dir']]
+        if self._cached_reader_instance is None or self._cached_reader_instance.params_key != reader_params_key:
+            self._cached_reader_instance = Reader(
+                dataset_dir=dataset_dir,
+                debug=rc['debug'],
+                iou_split_thresh=rc['iou_split_thresh'],
+                apply_gt_splitting=rc.get('subsegment', False),
+                verbose=rc.get('verbose', True)
+            )
 
+            self._cached_reader_instance.params_key = reader_params_key
 
-        reader = Reader(
-            dataset_dir=rc['dataset_dir'],
-            debug=rc['debug'],
-            iou_split_thresh=rc['iou_split_thresh'],
-            apply_gt_splitting=rc['subsegment']
+            # clear data list caches if reader changes
+            self._cached_image_data_list, self._cached_video_data_lists = None, {}
 
-        )
+        reader = self._cached_reader_instance
+
 
         stage = rc['model_stage']
         if stage == 1:
-            data_list = reader.xca_images
             kind = "images"
+            if self._cached_image_data_list is None:
+                self._cached_image_data_list = reader.xca_images
+            data_list = self._cached_image_data_list
+
+
         elif stage in (2, 3):
-            data_list = reader.construct_videos()
             kind = "videos"
+            video_cache_key = (rc.get('subsegment', False), )
+            if video_cache_key not in self._cached_video_data_lists:
+                self._cached_video_data_lists[video_cache_key] = reader.construct_videos()
+            data_list = self._cached_video_data_lists[video_cache_key]
         else:
             raise ValueError(f"Invalid model_stage {stage} in run_config")
 
@@ -321,9 +351,11 @@ class Experiment:
             normalize_params=rc['normalize_params'],
             t_clip=rc['t_clip'],
             seed=rc['seed'],
-            jitter=rc['jitter']
+            jitter=rc['jitter'],
+            verbose=rc.get('verbose', True),
         )
 
+        self.data_module.setup(stage='fit')
 
     def _setup_model(self):
         """Instantiate the appropriate model class based on `model_stage`."""
@@ -420,6 +452,8 @@ class Experiment:
         )
 
     def _print_config_summary(self):
+        if not self.verbose: return
+
         log('---- Configuration Summary ----')
         for key in (
             'model_stage', 'debug', 'profiler_enabled', 'pretrained', 'use_sca', 'subsegment',
@@ -433,10 +467,160 @@ class Experiment:
             'normalize_params', 'repeat_channels', 't_clip', 'jitter',
             'gpus_for_trainer', 'num_gpus_for_calc', 'num_workers', 'strategy_for_trainer',
             'precision', 'deterministic', 'seed',
-            'dataset_dir', 'log_dir',
+            'dataset_dir', 'ckpt_dir',
             'test_model_path', 'resume_from_ckpt'
         ):
             log(f'   {key}: {self.run_config.get(key)}')
+
+
+    def measure_inference_speed(self, testing_config_overrides, num_warmup=10, num_iterations=100):
+        """Measures inference speed (FPS and Latency) for the configured model"""
+        if not torch.cuda.is_available():
+            raise RuntimeError("CUDA not available — need a GPU to time inference.")
+
+        def _log_progress(i, t):
+            if (i + 1) % max(1, num_iterations // 10) == 0:
+                log(f"  Iter {i + 1}/{num_iterations}: {t:.2f} ms")
+
+        def _cuda_timed_call(inp):
+            start, end = CudaEvent(enable_timing=True), CudaEvent(enable_timing=True)
+            start.record(); _ = model(inp); end.record()
+            torch.cuda.synchronize()
+            return start.elapsed_time(end)
+
+        def _prep_input():
+            """Return device-ready input (list for stage-1 models, tensor otherwise)."""
+            self.data_module.setup(stage="test")
+            batch = next(iter(self.data_module.test_dataloader()))
+            x = batch[0] if isinstance(batch, (list, tuple)) else batch
+            x = x.to(device)
+
+            # match batch size given
+            bs, cur = self.run_config["batch_size"], x.size(0)
+            if cur < bs:
+                x = x.repeat(-(-bs // cur), *[1] * (x.ndim - 1))[:bs]  # ceil-repeat
+            elif cur > bs:
+                x = x[:bs]
+
+            if self.run_config["model_stage"] == 1:
+                if x.ndim == 5 and x.shape[1] == 1:  # [B, 1, C, H, W] - squeeze T dim
+                    return [frame.squeeze(0) for frame in x]  # list of [C,H,W]
+                if x.ndim == 4:  # [B, C, H, W]
+                    return list(x)  # unbind into list
+                raise ValueError(f"Unexpected input shape {x.shape} for stage-1 model")
+
+            # stages 2, 3: leave as batched tensor [B, T, C, H, W]
+            return x
+
+
+        testing_config_overrides.setdefault("batch_size", 1)
+        self.prepare_for_testing(testing_config_overrides)
+
+        device = torch.device("cuda")
+        model = self.lightning_module.model.to(device).eval()
+
+        # 1. get the correct sized input batch
+        inp = _prep_input()
+
+        # 2 warm-up
+        with torch.no_grad():
+            log(f"Warm-up ×{num_warmup} …")
+            for _ in range(num_warmup):
+                _ = model(inp)
+                torch.cuda.synchronize(device)
+
+            # 3. timed runs
+            log(f"Timing x{num_iterations}...")
+            times_ms = []
+            for i in range(num_iterations):
+                iter_time_ms = _cuda_timed_call(inp)
+                times_ms.append(iter_time_ms)
+                _log_progress(i, iter_time_ms)
+
+        if not times_ms:
+            return {"error": "No timings captured."}
+
+        # 4. summarize
+        ms_per_batch = sum(times_ms) / len(times_ms)
+        bs = self.run_config["batch_size"]
+        ms_per_sample = ms_per_batch / bs
+
+        t_clip = 1 if self.run_config["model_stage"] == 1 else self.run_config.get("t_clip", 1)
+        ms_per_frame = ms_per_sample / max(t_clip, 1)
+        fps = (bs * t_clip) / (ms_per_batch / 1000)
+
+        log(
+            f"Mean batch: {ms_per_batch:.2f} ms  |  "
+            f"latency/sample: {ms_per_sample:.2f} ms  |  "
+            f"latency/frame: {ms_per_frame:.2f} ms  |  "
+            f"FPS: {fps:.2f}"
+        )
+
+        return dict(
+            avg_time_ms_batch=ms_per_batch,
+            batch_size=bs,
+            t_clip_for_fps=t_clip,
+            avg_latency_ms_batch=ms_per_sample,
+            avg_latency_ms_frame=ms_per_frame,
+            fps=fps,
+            num_warmup=num_warmup,
+            num_timed=num_iterations,
+        )
+
+
+    def prepare_for_testing(self, testing_config_overrides: dict):
+        """Prepares the Experiment instance for a test-only run, given a checkpoint"""
+        log(f"Preparing for testing with overrides: {testing_config_overrides}")
+        if 'test_model_path' not in testing_config_overrides or not testing_config_overrides['test_model_path']:
+            raise ValueError("'test_model_path' must be provided in testing_config_overrides.")
+
+        if 'model_stage' not in testing_config_overrides:
+            if 'model_stage' not in self.config:  # try to infer from config if not given
+                raise ValueError("'model_stage' must be provided in testing_config_overrides or initial config.")
+
+            testing_config_overrides.setdefault('model_stage', self.config['model_stage'])
+
+
+        self.config.update(testing_config_overrides)
+        self._validate_config()
+        self._determine_devices_and_strategy()
+        self._configure_run_params()
+
+        self.run_config['pretrained_backbone'] = False # prevent overriding my weights by the backbone
+
+        self._setup_environment()
+        self._print_config_summary()
+
+        self._setup_data()
+        self._setup_model()
+        self._setup_lightning_module()
+
+    def run_test(self, testing_config_overrides: dict):
+        """Convenience method to prepare for testing and run test"""
+        self.prepare_for_testing(testing_config_overrides)
+        rc = self.run_config
+
+        if not rc.get('test_model_path'):
+            raise RuntimeError("test_model_path not set in run_config after prepare_for_testing.")
+
+        results = train_model(
+            data_module=self.data_module,
+            model=self.model,
+            lightning_module=self.lightning_module,
+            max_epochs=0,
+            patience=0,
+            gpus=rc['gpus'],
+            precision=rc['precision'],
+            accumulate_grad_batches=1,
+            strategy=rc['strategy'],
+            deterministic=rc.get('deterministic', False),
+            ckpt_dir=rc['ckpt_dir'],
+            profiler_enabled=False,
+            testing_ckpt_path=rc['test_model_path'],
+            resume_from_ckpt_path=None,
+            verbose=rc.get('verbose', True)
+        )
+        return results
 
 
     def run(self):
@@ -474,12 +658,14 @@ class Experiment:
             deterministic=rc.get('deterministic', False),
 
             # logging & profiling
-            log_dir=rc['log_dir'],
+            ckpt_dir=rc['ckpt_dir'],
             profiler_enabled=rc.get('profiler_enabled', False),
             profiler_scheduler_conf=rc.get('profiler_scheduler_conf'),
 
             testing_ckpt_path=rc.get('test_model_path', None),
-            resume_from_ckpt_path=rc.get('resume_from_ckpt')
+            resume_from_ckpt_path=rc.get('resume_from_ckpt'),
+
+            verbose=rc.get('verbose', True)
         )
 
 
@@ -490,7 +676,7 @@ class Experiment:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train XCA detection model")
     # Core args
-    parser.add_argument("--model_stage", type=int, choices=[1, 2, 3], required=True, help="Stage to train (1: RetinaNet, 2: TSM, 3: Transformer)")
+    parser.add_argument("--model_stage", type=int, choices=[1, 2, 3], required=True, help="Stage to train (1: RetinaNet, 2: TSM, 3: THANOS)")
     parser.add_argument("--max_epochs", type=int, default=24)
     parser.add_argument("--gpus", type=str, default="auto", help="GPU IDs comma-separated, 'auto', or 0 for CPU")
     parser.add_argument("--batch_size", type=int, default=None, help="Per-GPU batch size (overrides base config)")
@@ -504,7 +690,7 @@ if __name__ == "__main__":
     parser.add_argument("--patience", type=int, default=15)
     parser.add_argument("--warmup_steps", type=int, default=None)
     parser.add_argument("--weight_decay", type=float, default=None)
-    parser.add_argument("--scheduler", type=str, choices=['off', 'cosine', 'reduce'], default='cosine')
+    parser.add_argument("--scheduler", type=str, choices=['off', 'cosine', 'reduce'], default='reduce')
 
 
     parser.add_argument("--subsegment", action=argparse.BooleanOptionalAction, default=False)
@@ -529,7 +715,7 @@ if __name__ == "__main__":
 
     # Paths
     parser.add_argument("--dataset_dir", type=str, default='both')
-    parser.add_argument("--log_dir", type=str, default=LOGS_DIR)
+    parser.add_argument("--ckpt_dir", type=str, default=CHECKPOINTS_DIR)
 
     parser.add_argument("--test_model_path", type=str, default=None)
     parser.add_argument("--resume_from_ckpt", type=str, default=None)
