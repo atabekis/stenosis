@@ -428,6 +428,8 @@ class XCADataset(Dataset):
 
         mask = torch.arange(self.t_clip, device=clip_tensor.device) < clip_len
 
+        jittered_indices = sample_idxs if self.jitter else [] # frames which were possibly jittered
+
         metadata = {
             "patient_id": video.patient_id,
             "video_id": video.video_id,
@@ -436,7 +438,7 @@ class XCADataset(Dataset):
             "num_frames_in_clip": clip_len,
             "total_frames_in_video": total_frames,
             "is_full_video": clip_len == total_frames and pad_count > 0,
-            "jittered_frame_indices": sample_idxs
+            "jittered_frame_indices": jittered_indices
         }
         return clip_tensor, processed_targets, mask, metadata
 

@@ -85,7 +85,7 @@ class DetectionLightningModule(pl.LightningModule):
             # image logging/vis
             normalize_params: Optional[dict] = None,
             num_log_val_images: int = 1,  # how many images will be shown in the board (per epoch)
-            num_log_test_images: Union[int, str] = 100, # this can be set to "all" or int value. Setting to "all"
+            num_log_test_images: Union[int, str] = 1,   # this can be set to "all" or int value. Setting to "all"
                                                         # will result in a (very) long wait time after test epoch
             # hparam logging/tuning
             hparams_to_log: Optional[dict] = None,
@@ -412,13 +412,22 @@ class DetectionLightningModule(pl.LightningModule):
                              on_step=False, on_epoch=True, prog_bar=False,
                              logger=True, sync_dist=True, batch_size=batch_size)
 
+
         if is_test:
+            # get the time dim (num frames per clip)
+            frames_per_video = images.size(1)
+
             for i in range(batch_size):
-                test_tgt, test_pred, test_mask, test_meta = targets[i], preds[i], masks[i], metadata[i]
+                start_idx = i * frames_per_video
+                end_idx = start_idx + frames_per_video
+
+                # slice the preds list to get the sequence of preds
+                raw_preds = preds[start_idx:end_idx]
+
+                test_tgt, test_mask, test_meta = targets[i], masks[i], metadata[i]
 
                 # ensure we have a list of dicts
                 raw_tgts = test_tgt if isinstance(test_tgt, list) else [test_tgt]
-                raw_preds = test_pred if isinstance(test_pred, list) else [test_pred]
 
                 # move to cpu
                 tgts_to_store = [{k: v.cpu().detach() for k, v in frame.items()} for frame in raw_tgts]
@@ -431,7 +440,6 @@ class DetectionLightningModule(pl.LightningModule):
                     "predictions": preds_to_store,
                     "mask": mask_to_store,
                 })
-
 
     def training_step(self, batch, batch_idx):
         """The training step needs to explicitly return the losses for logging"""
