@@ -11,15 +11,15 @@ from torchvision.ops import box_iou
 
 
 # Local imports
-from methods.reader import XCAImage, Reader
-from config import CADICA_DATASET_DIR, DANILOV_DATASET_DIR, IOU_THRESH_METRIC, PROJECT_ROOT
+from methods.reader import Reader
+from config import IOU_THRESH_METRIC
 
 
 def get_tp_fp(
     pred_boxes: torch.Tensor, pred_scores: torch.Tensor, pred_labels: torch.Tensor,
     target_boxes: torch.Tensor, target_labels: torch.Tensor,
     iou_threshold: float
-) -> list[str]:
+) -> tuple[list[str], list[str]]:
     """
     Determine TP/FP status for each predicted box:
     - A prediction is a TP if its IoU with an unmatched GT box of the same class ≥ iou_threshold.
@@ -28,39 +28,38 @@ def get_tp_fp(
     num_preds = pred_boxes.size(0)
     num_targets = target_boxes.size(0)
 
-    if num_preds == 0:
-        return []
-
     device = pred_boxes.device
     target_boxes = target_boxes.to(device)
     target_labels = target_labels.to(device)
 
+    if num_preds == 0:
+        return [], ["FN"] * num_targets
+
     if num_targets == 0:
-        return ["FP"] * num_preds
+        return ["FP"] * num_preds, []
 
-    # initialize all as fp, record which gt are already matched.
-    tp_fp = ["FP"] * num_preds
+    pred_status = ["FP"] * num_preds
+    gt_status = ["FN"] * num_targets
     matched_gt = torch.zeros(num_targets, dtype=torch.bool, device=device)
-
-    # get iou matrix
     iou_matrix = box_iou(pred_boxes, target_boxes)
 
-
-    for pred_idx in torch.argsort(pred_scores, descending=True): # process preds in desc. score order
+    for pred_idx in torch.argsort(pred_scores, descending=True):
         label = pred_labels[pred_idx]
-        label_mask = (target_labels == label) & ~matched_gt # mask iouss to only consider same label, unmatched gts
+        label_mask = (target_labels == label) & ~matched_gt
         if not label_mask.any():
             continue
 
-        # get ious for pred and select best candidate
         ious = iou_matrix[pred_idx]
         masked_ious = ious.masked_fill(~label_mask, -1.0)
         best_iou, best_gt_idx = masked_ious.max(dim=0)
 
         if best_iou >= iou_threshold:
-            tp_fp[pred_idx.item()] = "TP"
+            pred_status[pred_idx.item()] = "TP"
+            gt_status[best_gt_idx.item()] = "TP"
             matched_gt[best_gt_idx] = True
-    return tp_fp
+
+    return pred_status, gt_status
+
 
 
 def visualize_predictions(xca_image, result_entry: dict, iou_threshold: float = IOU_THRESH_METRIC,
@@ -112,6 +111,14 @@ def visualize_predictions(xca_image, result_entry: dict, iou_threshold: float = 
         pred_scores = torch.empty((0,), device=device_pred)
         pred_labels = torch.empty((0,), dtype=torch.long, device=device_pred)
 
+    # if there are multiple predictions, select only the one with the highest score
+    if pred_boxes.size(0) > 1:
+        best_score_idx = torch.argmax(pred_scores)
+
+        pred_boxes = pred_boxes[best_score_idx].unsqueeze(0)
+        pred_scores = pred_scores[best_score_idx].unsqueeze(0)
+        pred_labels = pred_labels[best_score_idx].unsqueeze(0)
+
     # compute tp/fp for preds
     tp_fp_status =  get_tp_fp(
         pred_boxes, pred_scores, pred_labels,
@@ -120,15 +127,16 @@ def visualize_predictions(xca_image, result_entry: dict, iou_threshold: float = 
 
     # settings for drawing
     COLORS = {
-        "GT": (255, 0, 0), # blue
-        "TP": (0, 255, 0), # green
-        "FP": (0, 0, 255), # red
+        # "GT": (92, 220, 249), # naples yellow
+        "GT": (62, 162, 249), # naples yellow
+        "TP": (80, 175, 76), # pigment green
+        "FP": (53, 37, 228), # poppy - red
         "META": (255, 255, 255), # white
     }
-    THICKNESS = {"GT": 2, "PRED": 1}
+    THICKNESS = {"GT": 3, "PRED": 2}
     FONT = cv2.FONT_HERSHEY_SIMPLEX
-    FS_BOX = 0.45
-    FT_BOX = 1
+    FS_BOX = 0.5
+    FT_BOX = 2
     FS_META = 0.8
     FT_META = 2
 
@@ -151,8 +159,7 @@ def visualize_predictions(xca_image, result_entry: dict, iou_threshold: float = 
         box = pred_boxes[i].cpu().int().numpy()
         x1, y1, x2, y2 = box
         score = pred_scores[i].item()
-        status = tp_fp_status[i]
-
+        status = tp_fp_status[i][0]
         cv2.rectangle(img, (x1, y1), (x2, y2), COLORS[status], THICKNESS["PRED"])
 
         # score text
@@ -169,7 +176,7 @@ def visualize_predictions(xca_image, result_entry: dict, iou_threshold: float = 
     vid = meta.get("video_id", "N/A")
     fn = meta.get("frame_nr", "N/A")
     meta_text = f"Patient: {pid}, Video: {vid}, Frame: {fn}"
-    cv2.putText(img, meta_text, (10, 30), FONT, FS_META, COLORS["META"], FT_META, cv2.LINE_AA)
+    cv2.putText(img, meta_text, (20, 780), FONT, FS_META, COLORS["META"], FT_META, cv2.LINE_AA)
 
     img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB) # mock rgb
 
